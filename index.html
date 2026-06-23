@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>⚠️ DEV – Flow by TGL</title>
+<title>Flow by TGL</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <style>
@@ -443,7 +443,10 @@ tbody tr:last-child td{border-bottom:none}
 </style>
 </head>
 <body>
-
+<!-- DEV_ONLY_START -->
+<div style="position:fixed;top:0;left:0;right:0;z-index:99999;background:#dc2626;color:#fff;text-align:center;font-size:13px;font-weight:700;padding:5px;letter-spacing:.05em">⚠️ AMBIENTE DE TESTE — dados isolados, não afeta o sistema em produção</div>
+<div style="height:29px"></div>
+<!-- DEV_ONLY_END -->
 
 <!-- ═══ LOGIN ═══ -->
 <div id="login-screen">
@@ -2950,7 +2953,7 @@ function renderExp(){
       if(!isFin&&allLib)btns+='<button class="btn btn-green btn-sm" onclick="finalizarOP(\''+op.id+'\')">✅ Finalizar</button>';
       if(!isFin&&lib>0)btns+='<button class="btn btn-outline btn-sm" style="margin-left:4px" onclick="dispatchParcial(\''+op.id+'\')">📦 Despachar</button>';
       if(!isFin&&!allLib&&lib===0&&hasAnyDisp)btns+='<span style="font-size:11px;color:var(--muted);display:inline-block;margin-left:4px">⏳ Aguard. produção</span>';
-      if(!isFin&&canAntecip&&!hasAntecip)btns+='<button class="btn btn-sm" style="margin-left:4px;background:rgba(239,68,68,.15);color:var(--danger);border:1px solid rgba(239,68,68,.3)" onclick="antecipBilling(\''+op.id+'\')">🔴 Fat. Antecipado</button>';
+      if(!isFin&&canAntecip&&!hasAntecip)btns+='<button class="btn btn-sm" style="margin-left:4px;background:rgba(239,68,68,.15);color:var(--danger);border:1px solid rgba(239,68,68,.3);font-size:11px;padding:2px 7px;line-height:1.4" onclick="antecipBilling(\''+op.id+'\')">🔴 Fat. Antecipado</button>';
       if(!isFin&&hasAntecip)btns+='<span class="bs" style="margin-left:4px;background:rgba(239,68,68,.15);color:var(--danger);border:1px solid rgba(239,68,68,.3);font-size:11px">🔴 NF '+esc(op.anticipatedBilling.nf||'—')+'</span>';
       return btns;
     })();
