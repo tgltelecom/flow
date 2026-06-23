@@ -2985,8 +2985,12 @@ function renderExp(){
     '<div class="card-header"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+
     '<input class="sinput" id="srch-exp" placeholder="🔍 Pedido, cliente ou transportadora..." oninput="renderExp()" value="'+esc(qSavedExp)+'" style="width:260px">'+
     '<select class="sselect" id="filt-exp-st" onchange="renderExp()">'+
-    '<option value="">Todos</option><option value="ativo" '+(stFiltExp==='ativo'?'selected':'')+'>Ativos</option>'+
-    '<option value="finalizado" '+(stFiltExp==='finalizado'?'selected':'')+'>Finalizados</option></select>'+
+    '<option value="">Todos</option>'+
+    '<option value="ativo" '+(stFiltExp==='ativo'?'selected':'')+'>Ativos</option>'+
+    '<option value="finalizado" '+(stFiltExp==='finalizado'?'selected':'')+'>Finalizados</option>'+
+    '<option value="pronto" '+(stFiltExp==='pronto'?'selected':'')+'>✅ Prontos p/ Expedição</option>'+
+    '<option value="antecipado" '+(stFiltExp==='antecipado'?'selected':'')+'>🔴 Faturados Antecipadamente</option>'+
+    '</select>'+
     '<select class="sselect" id="filt-exp-col" onchange="_expColeta=(this.value);renderExp()">'+
     '<option value="">Todas logísticas</option>'+
     '<option value="redespacho_sp" '+(_expColeta==='redespacho_sp'?'selected':'')+'>🚛 Redespacho SP</option>'+
@@ -3032,7 +3036,7 @@ function renderExp(){
       if(!isFin&&allLib)btns+='<button class="btn btn-green btn-sm" onclick="finalizarOP(\''+op.id+'\')">✅ Finalizar</button>';
       if(!isFin&&lib>0)btns+='<button class="btn btn-outline btn-sm" style="margin-left:4px" onclick="dispatchParcial(\''+op.id+'\')">📦 Despachar</button>';
       if(!isFin&&!allLib&&lib===0&&hasAnyDisp)btns+='<span style="font-size:11px;color:var(--muted);display:inline-block;margin-left:4px">⏳ Aguard. produção</span>';
-      if(!isFin&&canAntecip&&!hasAntecip)btns+='<button class="btn btn-sm" style="margin-left:4px;background:rgba(239,68,68,.15);color:var(--danger);border:1px solid rgba(239,68,68,.3);font-size:11px;padding:2px 7px;line-height:1.4" onclick="antecipBilling(\''+op.id+'\')">🔴 Faturar Antecipadamente</button>';
+      if(!isFin&&canAntecip&&!hasAntecip)btns+='<button class="btn btn-sm" style="margin-left:4px;background:rgba(239,68,68,.15);color:var(--danger);border:1px solid rgba(239,68,68,.3);font-size:10px;padding:2px 6px;line-height:1.3;white-space:normal;max-width:72px;text-align:center" onclick="antecipBilling(\''+op.id+'\')">🔴 Faturar Antecip.</button>';
       if(!isFin&&hasAntecip)btns+='<span class="bs" style="margin-left:4px;background:rgba(239,68,68,.15);color:var(--danger);border:1px solid rgba(239,68,68,.3);font-size:11px;white-space:nowrap">✅ Pedido já faturado</span>';
       return btns;
     })();
