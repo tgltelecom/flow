@@ -970,6 +970,7 @@ function el(id){return document.getElementById(id);}
 function v(id){return(el(id)||{value:''}).value;}
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function fdate(d){if(!d)return'—';const p=d.split('-');return p.length===3?p[2]+'/'+p[1]+'/'+p[0]:d;}
+function fnum(n){const v=parseInt(n)||0;return v.toLocaleString('pt-BR');}
 function today8601(){return new Date().toISOString().split('T')[0];}
 
 function diasChip(dateStr,status){
@@ -1250,10 +1251,10 @@ function rDashboard(cnt){
       '<div class="sb-pend" style="width:'+pPend+'%"></div>'+
       '</div>'+
       '<div class="sect-leg">'+
-      '<span style="color:var(--green)">■ '+s.lib+' lib.</span>'+
-      '<span style="color:#3b82f6">■ '+s.prod+' prod.</span>'+
-      (s.blk?'<span style="color:#ef4444">■ '+s.blk+' bloq.</span>':'')+'<span>'+
-      (s.total-s.lib-s.prod-s.blk)+' pend.</span></div>';
+      '<span style="color:var(--green)">■ '+fnum(s.lib)+' lib.</span>'+
+      '<span style="color:#3b82f6">■ '+fnum(s.prod)+' prod.</span>'+
+      (s.blk?'<span style="color:#ef4444">■ '+fnum(s.blk)+' bloq.</span>':'')+'<span>'+
+      fnum(s.total-s.lib-s.prod-s.blk)+' pend.</span></div>';
   }
   function kCard(val,label,sub,cls){
     return'<div class="kcard '+cls+'"><div class="kval">'+val+'</div>'+
@@ -1262,19 +1263,19 @@ function rDashboard(cnt){
 
   // Build KPI cards
   const kpis=[
-    kCard(vencidos.length,'OPs Vencidas',
+    kCard(fnum(vencidos.length),'OPs Vencidas',
       vencidos.length?'Requer atenção imediata ⚠️':'Nenhuma OP atrasada ✓',
       vencidos.length?'kred':'kgreen'),
-    kCard(aVencer7.length,'Vencem em 7 dias',
-      activeOps.length+' OPs ativas no total',
+    kCard(fnum(aVencer7.length),'Vencem em 7 dias',
+      fnum(activeOps.length)+' OPs ativas no total',
       aVencer7.length>2?'korange':aVencer7.length>0?'kyellow':'kgreen'),
-    kCard(bloqueados,'Itens Bloqueados',
+    kCard(fnum(bloqueados),'Itens Bloqueados',
       'Aguardando MP / falta material',
       bloqueados?'kred':'kgreen'),
     kCard(effPct===null?'—':effPct+'%','Entregas no Prazo',
-      recFin.length?' Últimos 30 dias ('+recFin.length+' OPs)':"Sem OPs finalizadas ainda",
+      recFin.length?' Últimos 30 dias ('+fnum(recFin.length)+' OPs)':"Sem OPs finalizadas ainda",
       effPct===null?'kgray':effPct>=85?'kgreen':effPct>=70?'kyellow':'kred'),
-    kCard(prontos.length+(parciais.length?' ('+parciais.length+' parciais)':''),
+    kCard(fnum(prontos.length)+(parciais.length?' ('+fnum(parciais.length)+' parciais)':''),
       'Prontos p/ Expedição',
       prontos.length?'Aguardando despacho 🚚':'Tudo em produção ✓',
       prontos.length?'kyellow':'kgreen'),
@@ -1303,7 +1304,7 @@ function rDashboard(cnt){
 
   // Sector pipeline HTML
   const pipeHTML=Object.entries(secs).map(([k,s])=>'<div class="sect-wrap">'+
-    '<div class="sect-top"><span>'+s.label+'</span><span>'+s.total+' item(s)</span></div>'+
+    '<div class="sect-top"><span>'+s.label+'</span><span>'+fnum(s.total)+' item(s)</span></div>'+
     secBarHTML(s)+
   '</div>').join('');
 
@@ -2227,7 +2228,7 @@ function viewOP(id){
     }
     if(itemDispStr==='—'&&op.finalAt&&(i.partiallyDispatched||_itemFullyDisp(i)))itemDispStr=new Date(op.finalAt).toLocaleDateString('pt-BR')+' '+new Date(op.finalAt).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
     const qDisp=i.qtyDispatched||0;
-    const qDispStr=qDisp>0?'<span style="font-size:11px;color:var(--warn)">'+qDisp+'/'+i.qty+'</span>':i.qty;
+    const qDispStr=qDisp>0?'<span style="font-size:11px;color:var(--warn)">'+fnum(qDisp)+'/'+fnum(i.qty)+'</span>':fnum(i.qty);
     return'<tr><td>'+esc(p?p.name:i.productName)+'</td><td><span class="sku">'+esc(i.sku||'—')+'</span></td>'+
       '<td>'+qDispStr+'</td>'+
       '<td><span class="bs '+stclass(i.status)+'">'+stlabel(i.status)+'</span></td>'+
@@ -2461,9 +2462,9 @@ function renderEstoque(){
       else{cls='sem sem-r';label='Insuficiente';}
       return'<tr><td><strong>'+esc(p.name)+'</strong></td>'+
         '<td><span class="sku">'+esc(p.sku||'—')+'</span></td>'+
-        '<td style="text-align:center">'+(qty!==null?'<strong style="font-size:16px">'+qty+'</strong>':'<span style="color:var(--muted)">—</span>')+'</td>'+
-        '<td style="text-align:center">'+(dem>0?'<span style="background:rgba(245,158,11,.15);color:var(--warn);border:1px solid rgba(245,158,11,.25);border-radius:4px;padding:2px 8px;font-size:13px;font-weight:600">🔒 '+dem+'</span>':'<span style="color:var(--muted);font-size:12px">—</span>')+'</td>'+
-        '<td style="text-align:center">'+(avail===null?'—':avail>=0?'<span style="color:var(--green);font-weight:700;font-size:16px">+'+avail+'</span>':'<span style="color:var(--danger);font-weight:700;font-size:14px">⚠️ Falta '+Math.abs(avail)+'</span>')+'</td>'+
+        '<td style="text-align:center">'+(qty!==null?'<strong style="font-size:16px">'+fnum(qty)+'</strong>':'<span style="color:var(--muted)">—</span>')+'</td>'+
+        '<td style="text-align:center">'+(dem>0?'<span style="background:rgba(245,158,11,.15);color:var(--warn);border:1px solid rgba(245,158,11,.25);border-radius:4px;padding:2px 8px;font-size:13px;font-weight:600">🔒 '+fnum(dem)+'</span>':'<span style="color:var(--muted);font-size:12px">—</span>')+'</td>'+
+        '<td style="text-align:center">'+(avail===null?'—':avail>=0?'<span style="color:var(--green);font-weight:700;font-size:16px">+'+fnum(avail)+'</span>':'<span style="color:var(--danger);font-weight:700;font-size:14px">⚠️ Falta '+fnum(Math.abs(avail))+'</span>')+'</td>'+
         '<td><span class="'+cls+'"><span class="sem-dot"></span>'+label+'</span></td>'+
         '<td style="white-space:nowrap"><button class="btn btn-ghost btn-sm" onclick="openLancamento(\x27'+p.id+'\x27)">Lançar</button> <button class="btn btn-ghost btn-sm" onclick="openInventario(\x27'+p.id+'\x27)">Inventário</button></td></tr>';
     }).join('')+'</tbody></table>';
@@ -2472,7 +2473,7 @@ function renderEstoque(){
 function openLancamento(pid){
   const d=gdb();
   let prodSel;
-  if(pid){const p=d.products.find(x=>x.id===pid);prodSel='<input type="hidden" id="ae-prod" value="'+pid+'"><div class="alert alert-info"><strong>'+esc(p?p.name:'')+'</strong>'+(d.stock[pid]?'<br>Estoque atual: <strong>'+d.stock[pid].qty+'</strong> un.':'')+'</div>';}
+  if(pid){const p=d.products.find(x=>x.id===pid);prodSel='<input type="hidden" id="ae-prod" value="'+pid+'"><div class="alert alert-info"><strong>'+esc(p?p.name:'')+'</strong>'+(d.stock[pid]?'<br>Estoque atual: <strong>'+fnum(d.stock[pid].qty)+'</strong> un.':'')+'</div>';}
   else{const prods2=d.products.filter(p=>p.isStock);if(!prods2.length){toast('Nenhum produto de revenda cadastrado','info');return;}prodSel='<div class="fg"><label>Produto</label><select id="ae-prod">'+prods2.map(p=>'<option value="'+p.id+'">'+esc(p.name)+'</option>').join('')+'</select></div>';}
   Mopen('➕ Novo Lançamento de Estoque',
     prodSel+'<div class="fg"><label>Quantidade a adicionar *</label><input type="number" id="ae-qty" min="1" placeholder="Ex: 500"></div>'+
@@ -2493,7 +2494,7 @@ function saveLancEst(){
 function openInventario(pid){
   const d=gdb();
   let prodSel;
-  if(pid){const p=d.products.find(x=>x.id===pid);const st2=d.stock[pid];prodSel='<input type="hidden" id="inv-prod" value="'+pid+'"><div class="alert alert-info"><strong>'+esc(p?p.name:'')+'</strong>'+(st2?'<br>Estoque atual: <strong>'+st2.qty+'</strong> un.':'')+'</div>';}
+  if(pid){const p=d.products.find(x=>x.id===pid);const st2=d.stock[pid];prodSel='<input type="hidden" id="inv-prod" value="'+pid+'"><div class="alert alert-info"><strong>'+esc(p?p.name:'')+'</strong>'+(st2?'<br>Estoque atual: <strong>'+fnum(st2.qty)+'</strong> un.':'')+'</div>';}
   else{const prods2=d.products.filter(p=>p.isStock);if(!prods2.length){toast('Nenhum produto de revenda cadastrado','info');return;}prodSel='<div class="fg"><label>Produto</label><select id="inv-prod">'+prods2.map(p=>'<option value="'+p.id+'">'+esc(p.name)+'</option>').join('')+'</select></div>';}
   const st2=pid&&d.stock[pid];
   Mopen('📋 Inventário — Definir Quantidade Total',
@@ -2604,9 +2605,9 @@ function goProducao(sec){
         <td><strong>#${esc(op.opNum)}</strong></td>
         <td>${esc(op.clientName)}</td>
         <td>${fdate(op.deliveryDate)} ${diasChip(op.deliveryDate,op.status)}</td>
-        <td style="color:var(--muted);font-size:13px">${tot} item(s)</td>
+        <td style="color:var(--muted);font-size:13px">${fnum(tot)} item(s)</td>
         <td>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">${lib}/${tot} lib${libParcial?' &bull; <span style="color:var(--warn)">'+libParcial+' parcial</span>':''}</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">${fnum(lib)}/${fnum(tot)} lib${libParcial?' &bull; <span style="color:var(--warn)">'+libParcial+' parcial</span>':''}</div>
           <div class="pbar-wrap" style="width:120px"><div class="pbar" style="width:${pct}%"></div></div>
         </td>
       </tr>
@@ -2625,8 +2626,8 @@ function goProducao(sec){
                   const isPartialRel=item.status==='liberado'&&qRel>0&&qRel<item.qty;
                   const qRestante=item.qty-qRel;
                   const qtyLabel=qRel>0&&qRel<item.qty?
-                    item.qty+' <span style="font-size:11px;color:var(--warn)">● '+qRel+' lib. / '+qRestante+' rest.</span>':
-                    ''+item.qty;
+                    fnum(item.qty)+' <span style="font-size:11px;color:var(--warn)">● '+fnum(qRel)+' lib. / '+fnum(qRestante)+' rest.</span>':
+                    fnum(item.qty);
                   const rowBg=isPartialRel?'background:rgba(234,179,8,.07);':'';
                   const canLibParcial=(item.status!=='liberado')||(qRel>0&&qRestante>0);
                   return'<tr style="border-bottom:1px solid rgba(255,255,255,.04);'+rowBg+'">'+
@@ -2663,7 +2664,7 @@ function liberarParcial(opId,idx,sec){
   const p=d.products.find(x=>x.id===item.pid);
   Mopen('📦 Liberar Parcialmente',
     '<div style="font-size:13px;margin-bottom:10px">Produto: <strong>'+esc(p?p.name:item.productName)+'</strong></div>'+
-    '<div style="font-size:13px;margin-bottom:14px;color:var(--muted)">Qtd pedida: <strong>'+item.qty+'</strong> '+esc(item.unit||'PC')+(item.qtyReleased?'  ·  Já liberado: <strong style="color:var(--warn)">'+item.qtyReleased+'</strong>':'')+'</div>'+
+    '<div style="font-size:13px;margin-bottom:14px;color:var(--muted)">Qtd pedida: <strong>'+fnum(item.qty)+'</strong> '+esc(item.unit||'PC')+(item.qtyReleased?'  ·  Já liberado: <strong style="color:var(--warn)">'+fnum(item.qtyReleased)+'</strong>':'')+'</div>'+
     '<div class="fg"><label>Quantidade a liberar agora *</label><input type="number" id="lp-qty" class="sinput" min="1" max="'+item.qty+'" value="'+item.qty+'"></div>'+
     '<div class="alert alert-warn" style="margin-top:12px;font-size:12px">O item ficará marcado como <strong>Liberado</strong> com a quantidade informada. A expedição poderá despachar apenas essa quantidade.</div>',
     '<button class="btn btn-ghost" onclick="Mclose()">Cancelar</button>'+
@@ -2752,9 +2753,9 @@ function renderSeparacao(){
         <td><strong>#${esc(op.opNum)}</strong></td>
         <td>${esc(op.clientName)}</td>
         <td>${fdate(op.deliveryDate)} ${diasChip(op.deliveryDate,op.status)}</td>
-        <td style="color:var(--muted);font-size:13px">${tot} item(s)</td>
+        <td style="color:var(--muted);font-size:13px">${fnum(tot)} item(s)</td>
         <td>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">${lib}/${tot} liberados</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">${fnum(lib)}/${fnum(tot)} liberados</div>
           <div class="pbar-wrap" style="width:120px"><div class="pbar" style="width:${pct}%"></div></div>
         </td>
       </tr>
@@ -2779,8 +2780,8 @@ function renderSeparacao(){
                   const qRestante=item.qty-qRel;
                   const canLibParcial=(item.status!=='liberado')||(qRel>0&&qRestante>0);
                   const qtyLabel=isPartialRel
-                    ?item.qty+' <span style="font-size:11px;color:var(--warn)">● '+qRel+' lib. / '+qRestante+' rest.</span>'
-                    :''+item.qty;
+                    ?fnum(item.qty)+' <span style="font-size:11px;color:var(--warn)">● '+fnum(qRel)+' lib. / '+fnum(qRestante)+' rest.</span>'
+                    :fnum(item.qty);
                   return'<tr style="border-bottom:1px solid rgba(255,255,255,.04)'+(isPartialRel?';background:rgba(234,179,8,.07)':'')+'">'
                     +'<td style="padding:10px"><strong>'+esc(p?p.name:item.productName)+'</strong></td>'
                     +'<td style="padding:10px"><span class="sku">'+esc(item.sku||'—')+'</span></td>'
@@ -2941,7 +2942,7 @@ function renderExp(){
       if(isFin)return'<span class="bs bs-finalizado">✅ Finalizado</span>'+(op.partialDispatches&&op.partialDispatches.length?'<span class="bs bs-warn" style="margin-left:4px;font-size:10px">+parciais</span>':'');
       if(allLib)return'<span class="bs bs-liberado">Pronto p/ Expedição</span>'+partialBadge;
       const libDisp=lib+dispatched;
-      return'<span class="bs bs-producao">'+libDisp+'/'+tot+' prontos'+(hasAnyDisp?' · '+dispatched+' despach.':'')+'</span>';
+      return'<span class="bs bs-producao">'+fnum(libDisp)+'/'+fnum(tot)+' prontos'+(hasAnyDisp?' · '+fnum(dispatched)+' despach.':'')+'</span>';
     })();
     const canAntecip=S&&_roles(S).some(r=>r==='admin'||r==='pcp');
     const hasAntecip=!!op.anticipatedBilling;
@@ -2984,14 +2985,14 @@ function renderExp(){
                   const libLog=(item.stageLog||[]).filter(l=>l.status==='liberado');
                   const libAt=libLog.length?new Date(libLog[libLog.length-1].at):null;
                   const libStr=libAt?libAt.toLocaleDateString('pt-BR')+' '+libAt.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}):'—';
-                  const dispBadge=isFD?'<span class="bs bs-finalizado">📦 Despachado'+(item.qtyDispatched?'  '+item.qtyDispatched:'')+'/'+item.qty+'</span>':
-                    hasPartDisp?'<span class="bs bs-warn">📦 Parcial '+qDisp+'/'+item.qty+'</span>':
+                  const dispBadge=isFD?'<span class="bs bs-finalizado">📦 Despachado'+(item.qtyDispatched?'  '+fnum(item.qtyDispatched):'')+'/'+fnum(item.qty)+'</span>':
+                    hasPartDisp?'<span class="bs bs-warn">📦 Parcial '+fnum(qDisp)+'/'+fnum(item.qty)+'</span>':
                     '<span class="bs '+stclass(item.status)+'">'+stlabel(item.status)+'</span>';
                   return'<tr style="border-bottom:1px solid rgba(255,255,255,.04)">'+
                     '<td style="padding:10px">'+esc(p?p.name:item.productName)+'</td>'+
                     '<td style="padding:10px"><span class="sku">'+esc(item.sku||'—')+'</span></td>'+
-                    '<td style="padding:10px">'+item.qty+'</td>'+
-                    '<td style="padding:10px;font-size:13px">'+(hasPartDisp?'<strong>'+qDisp+'</strong> <span style="color:var(--muted);font-size:11px">/ '+item.qty+'</span>':'—')+'</td>'+
+                    '<td style="padding:10px">'+fnum(item.qty)+'</td>'+
+                    '<td style="padding:10px;font-size:13px">'+(hasPartDisp?'<strong>'+fnum(qDisp)+'</strong> <span style="color:var(--muted);font-size:11px">/ '+fnum(item.qty)+'</span>':'—')+'</td>'+
                     '<td style="padding:10px"><input type="number" min="0" value="'+(item.recount!=null?item.recount:item.qty)+'" style="width:80px;padding:6px;background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text)" onchange="saveRecount(\''+op.id+'\','+idx+',this.value)"></td>'+
                     '<td style="padding:10px">'+dispBadge+'</td>'+
                     '<td style="padding:10px;font-size:11px;color:var(--muted)">'+libStr+'</td>'+
@@ -3498,7 +3499,7 @@ function renderFocusContent(sec){
       const fl=[item.etiqueta?'🏷️':'',item.caixa?'📦':'',item.gravacao?'✏️':''].filter(Boolean).join(' ');
       const isLib=item.status==='liberado';
       return'<tr style="border-bottom:1px solid rgba(255,255,255,.06)'+(isLib?';opacity:.5':'')+'">'+
-        '<td style="padding:14px 10px;font-size:15px"><strong>'+esc(p?p.name:item.productName||'')+'</strong>'+(fl?' <span style="font-size:12px">'+fl+'</span>':'')+'<div style="font-size:12px;color:var(--muted);margin-top:2px">'+item.qty+' '+(item.unit||'PC')+'</div></td>'+
+        '<td style="padding:14px 10px;font-size:15px"><strong>'+esc(p?p.name:item.productName||'')+'</strong>'+(fl?' <span style="font-size:12px">'+fl+'</span>':'')+'<div style="font-size:12px;color:var(--muted);margin-top:2px">'+fnum(item.qty)+' '+(item.unit||'PC')+'</div></td>'+
         '<td style="padding:14px 10px;min-width:220px"><select class="sselect" style="font-size:14px;padding:10px 12px;width:100%" onchange="chStatus(\''+op.id+'\','+globalIdx+',this.value,\''+sec+'\')">'+opts+'</select></td>'+
       '</tr>';
     }).join('');
@@ -3506,7 +3507,7 @@ function renderFocusContent(sec){
       '<div class="card-header">'+
         '<div><strong style="font-size:16px">#'+esc(op.opNum)+'</strong><span style="color:var(--muted);margin-left:10px;font-size:13px">'+esc(op.clientName)+'</span></div>'+
         '<div style="text-align:right">'+fdate(op.deliveryDate)+' '+diasChip(op.deliveryDate,op.status)+
-        '<div style="font-size:12px;color:var(--muted);margin-top:2px">'+lib+'/'+tot+' liberados</div></div>'+
+        '<div style="font-size:12px;color:var(--muted);margin-top:2px">'+fnum(lib)+'/'+fnum(tot)+' liberados</div></div>'+
       '</div>'+
       '<div style="padding:0 18px 6px"><div class="pbar-wrap"><div class="pbar" style="width:'+pct+'%"></div></div></div>'+
       '<table style="width:100%"><thead><tr><th style="padding:8px 10px;font-size:11px;color:var(--muted);text-align:left">Produto</th><th style="padding:8px 10px;font-size:11px;color:var(--muted)">Status</th></tr></thead><tbody>'+rows+'</tbody></table>'+
