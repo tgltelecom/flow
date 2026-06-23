@@ -444,6 +444,7 @@ tbody tr:last-child td{border-bottom:none}
 </head>
 <body>
 
+
 <!-- ═══ LOGIN ═══ -->
 <div id="login-screen">
   <div class="lcard">
@@ -2949,8 +2950,8 @@ function renderExp(){
       if(!isFin&&allLib)btns+='<button class="btn btn-green btn-sm" onclick="finalizarOP(\''+op.id+'\')">✅ Finalizar</button>';
       if(!isFin&&lib>0)btns+='<button class="btn btn-outline btn-sm" style="margin-left:4px" onclick="dispatchParcial(\''+op.id+'\')">📦 Despachar</button>';
       if(!isFin&&!allLib&&lib===0&&hasAnyDisp)btns+='<span style="font-size:11px;color:var(--muted);display:inline-block;margin-left:4px">⏳ Aguard. produção</span>';
-      if(!isFin&&canAntecip&&!hasAntecip)btns+='<button class="btn btn-sm" style="margin-left:4px;background:rgba(239,68,68,.15);color:var(--danger);border:1px solid rgba(239,68,68,.3);font-size:11px;padding:2px 7px;line-height:1.4" onclick="antecipBilling(\''+op.id+'\')">🔴 Fat. Antecipado</button>';
-      if(!isFin&&hasAntecip)btns+='<span class="bs" style="margin-left:4px;background:rgba(239,68,68,.15);color:var(--danger);border:1px solid rgba(239,68,68,.3);font-size:11px">🔴 NF '+esc(op.anticipatedBilling.nf||'—')+'</span>';
+      if(!isFin&&canAntecip&&!hasAntecip)btns+='<button class="btn btn-sm" style="margin-left:4px;background:rgba(239,68,68,.15);color:var(--danger);border:1px solid rgba(239,68,68,.3);font-size:11px;padding:2px 7px;line-height:1.4" onclick="antecipBilling(\''+op.id+'\')">🔴 Faturar Antecipadamente</button>';
+      if(!isFin&&hasAntecip)btns+='<span class="bs" style="margin-left:4px;background:rgba(239,68,68,.15);color:var(--danger);border:1px solid rgba(239,68,68,.3);font-size:11px;white-space:nowrap">✅ Pedido já faturado</span>';
       return btns;
     })();
     const rowCls2=hasAntecip&&!isFin?'tr-billing':rowCls;
