@@ -443,10 +443,6 @@ tbody tr:last-child td{border-bottom:none}
 </style>
 </head>
 <body>
-<!-- DEV_ONLY_START -->
-<div style="position:fixed;top:0;left:0;right:0;z-index:99999;background:#dc2626;color:#fff;text-align:center;font-size:13px;font-weight:700;padding:5px;letter-spacing:.05em">⚠️ AMBIENTE DE TESTE — dados isolados, não afeta o sistema em produção</div>
-<div style="height:29px"></div>
-<!-- DEV_ONLY_END -->
 
 <!-- ═══ LOGIN ═══ -->
 <div id="login-screen">
@@ -2958,7 +2954,7 @@ function renderExp(){
       return btns;
     })();
     const rowCls2=hasAntecip&&!isFin?'tr-billing':rowCls;
-    const antecipBadge=hasAntecip&&!isFin?'<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--danger);font-weight:700;margin-left:6px">🔴 FAT. ANTECIPADO</span>':'';
+    const antecipBadge=hasAntecip&&!isFin?'<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--danger);font-weight:700;margin-left:6px;white-space:nowrap">🔴 FAT. ANTECIPADO</span>':'';
     html+=`
       <tr class="${rowCls2}">
         <td><button class="xbtn" id="xbe-${op.id}" onclick="togExpand('${expandId}','xbe-${op.id}')">▶</button></td>
