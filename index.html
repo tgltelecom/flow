@@ -533,8 +533,14 @@ if(typeof pdfjsLib!=='undefined') pdfjsLib.GlobalWorkerOptions.workerSrc='https:
 // ─── DB / SUPABASE ───
 const SUPA_URL='https://bobzfvyqqxapvoabtejl.supabase.co';
 const SUPA_KEY='sb_publishable_yyFwUYtK5D24yeAsd6jkjQ_UuizdNAA';
-const APP_VERSION='1.1.1';
+const APP_VERSION='1.1.2';
 const APP_CHANGELOG={
+  '1.1.2':[
+    'Admin: enviar alertas personalizados para usuários (aparecem ao entrar no sistema)',
+    'Admin: forçar logout de usuário específico ou de todos',
+    'Expedição: filtros "Prontos p/ Expedição" e "Faturados Antecipadamente"',
+    'Números com separação de milhar em todo o sistema',
+  ],
   '1.1.1':[
     'Correção: status de item não era perdido ao salvar simultaneamente com outro usuário',
     'Correção: heartbeat de presença não sobrescreve mais ações feitas durante o intervalo',
@@ -736,7 +742,7 @@ function setSyncBadge(ok){
 
 function gdb(){return _db||idb();}
 function sdb(d){_db=d;try{localStorage.setItem('tgl_bk',JSON.stringify(d));}catch{}saveDBRemote(d);}
-function idb(){return{users:[{id:'u1',name:'Administrador',email:'admin@tgltelecom.com.br',password:'admin123',role:'admin',firstAccess:false,pending:false}],clients:[],products:[],ops:[],stock:{},seq:1000,presence:{},auditLog:[]};}
+function idb(){return{users:[{id:'u1',name:'Administrador',email:'admin@tgltelecom.com.br',password:'admin123',role:'admin',firstAccess:false,pending:false}],clients:[],products:[],ops:[],stock:{},seq:1000,presence:{},auditLog:[],alerts:{},forceLogout:{}};}
 function uid(){return '_'+Math.random().toString(36).substr(2,9);}
 function logAction(d,action,details){
   if(!S)return;
@@ -755,7 +761,7 @@ async function hashPw(pw){
 function isHashed(pw){return typeof pw==='string'&&pw.length===64&&/^[0-9a-f]+$/.test(pw);}
 
 // ─── SESSION ───
-let S=null, _faUser=null;
+let S=null, _faUser=null, _loginAt=0;
 
 async function doLogin(){
   const em=v('l-email').trim(), pw=v('l-pw');
@@ -810,6 +816,7 @@ function doRegister(){
 
 function startApp(u){
   S=u;
+  _loginAt=Date.now();
   // Set version label on login screen
   const vl=el('ver-lbl');if(vl)vl.textContent='v'+APP_VERSION;
   // Record login timestamp
@@ -826,8 +833,8 @@ function startApp(u){
   el('app').classList.add('on');
   el('huser').textContent=u.name+' · '+rlabelUser(u);
   buildNav();navFirst();
-  // Show changelog modal if version changed
-  setTimeout(()=>_checkChangelog(u),400);
+  // Show changelog modal if version changed, then check alerts
+  setTimeout(()=>{_checkChangelog(u);setTimeout(()=>_checkAlert(),600);},400);
 }
 function _checkChangelog(u){
   const d=gdb();
@@ -853,8 +860,71 @@ function _dismissChangelog(){
 
 (function(){const vl=document.getElementById('ver-lbl');if(vl)vl.textContent='v'+APP_VERSION;})();
 function doLogout(){
-  S=null;el('app').classList.remove('on');el('login-screen').style.display='flex';
+  S=null;_loginAt=0;el('app').classList.remove('on');el('login-screen').style.display='flex';
   showLF('login');el('l-email').value='';el('l-pw').value='';
+}
+// ─── ALERTS ───────────────────────────────────────────────────────────────────
+function _checkAlert(){
+  if(!S)return;
+  const d=gdb();
+  const al=(d.alerts||{})[S.id];
+  if(!al||al.read)return;
+  Mopen('📢 Alerta do Administrador',
+    '<div class="alert alert-warn" style="margin-bottom:0;font-size:15px;line-height:1.7">'+esc(al.msg)+'</div>'+
+    '<div style="font-size:12px;color:var(--muted);margin-top:10px">Enviado por '+esc(al.sentBy||'Admin')+' em '+new Date(al.sentAt).toLocaleDateString('pt-BR')+'</div>',
+    '<button class="btn btn-green" onclick="confirmAlert()">✅ Confirmar leitura</button>'
+  );
+}
+function confirmAlert(){
+  if(!S)return;
+  const d=gdb();
+  if(!d.alerts)d.alerts={};
+  if(d.alerts[S.id])d.alerts[S.id].read=true;
+  sdb(d);Mclose();
+}
+function openAlertForm(uid){
+  const d=gdb(),u=d.users.find(x=>x.id===uid);if(!u)return;
+  Mopen('📢 Enviar Alerta para '+esc(u.name),
+    '<div class="fg"><label>Mensagem *</label>'+
+    '<textarea id="al-msg" style="width:100%;height:90px;padding:10px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;resize:vertical" placeholder="Ex: Fulano, favor fazer lançamento de estoque do item X..."></textarea></div>'+
+    '<div class="alert alert-info" style="margin-top:8px;font-size:12px">O alerta aparecerá na próxima vez que o usuário entrar, ou imediatamente se já estiver logado.</div>',
+    '<button class="btn btn-ghost" onclick="Mclose()">Cancelar</button>'+
+    '<button class="btn btn-green" onclick="sendAlert(\''+uid+'\')">📢 Enviar</button>'
+  );
+}
+function sendAlert(uid){
+  const msg=(document.getElementById('al-msg')||{}).value&&document.getElementById('al-msg').value.trim();
+  if(!msg){toast('Digite a mensagem','err');return;}
+  const d=gdb();
+  if(!d.alerts)d.alerts={};
+  d.alerts[uid]={msg,sentAt:Date.now(),sentBy:S?S.name:'Admin',read:false};
+  logAction(d,'Alerta enviado',d.users.find(u=>u.id===uid)?.name||uid);
+  sdb(d);Mclose();toast('Alerta enviado!','ok');
+}
+// ─── FORCE LOGOUT ─────────────────────────────────────────────────────────────
+function forceLogoutUser(uid){
+  if(!confirm('Deslogar este usuário?'))return;
+  const d=gdb();
+  if(!d.forceLogout)d.forceLogout={};
+  d.forceLogout[uid]=Date.now();
+  logAction(d,'Forçar logout',d.users.find(u=>u.id===uid)?.name||uid);
+  sdb(d);toast('Usuário será deslogado na próxima sincronização.','ok');
+}
+function forceLogoutAll(){
+  if(!confirm('Deslogar TODOS os usuários (exceto você)?'))return;
+  const d=gdb();
+  if(!d.forceLogout)d.forceLogout={};
+  d.forceLogout._all=Date.now();
+  logAction(d,'Forçar logout de todos','');
+  sdb(d);toast('Todos serão deslogados na próxima sincronização.','ok');
+}
+function _checkForceLogout(nd){
+  if(!S||!nd.forceLogout)return;
+  const fl=nd.forceLogout;
+  const myFL=fl[S.id]||0;
+  const allFL=fl._all||0;
+  const trigger=Math.max(myFL,allFL);
+  if(trigger>_loginAt){doLogout();toast('Você foi deslogado pelo administrador.','info');}
 }
 
 function showLF(f){
@@ -2864,6 +2934,13 @@ function renderExp(){
   if(qSavedExp)ops=ops.filter(o=>o.opNum.toLowerCase().includes(qSavedExp)||(o.clientName||'').toLowerCase().includes(qSavedExp)||(o.transporter||'').toLowerCase().includes(qSavedExp));
   if(stFiltExp==='ativo')ops=ops.filter(o=>o.status!=='finalizado');
   if(stFiltExp==='finalizado')ops=ops.filter(o=>o.status==='finalizado');
+  if(stFiltExp==='pronto')ops=ops.filter(o=>{
+    if(o.status==='finalizado')return false;
+    const lib=o.items.filter(i=>i.status==='liberado'&&!_itemFullyDisp(i)&&_itemQtyLeft(i)>0).length;
+    const disp=o.items.filter(i=>_itemFullyDisp(i)).length;
+    return(lib+disp)===o.items.length&&o.items.length>0;
+  });
+  if(stFiltExp==='antecipado')ops=ops.filter(o=>!!o.anticipatedBilling&&o.status!=='finalizado');
   if(coletaFilt)ops=ops.filter(o=>o.coleta===coletaFilt);
   // Sort
   ops.sort((a,b)=>{
@@ -2886,8 +2963,12 @@ function renderExp(){
       '<div class="card-header"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+
       '<input class="sinput" id="srch-exp" placeholder="🔍 Pedido, cliente ou transportadora..." oninput="renderExp()" value="'+esc(qSavedExp)+'" style="width:260px">'+
       '<select class="sselect" id="filt-exp-st" onchange="renderExp()">'+
-      '<option value="">Todos</option><option value="ativo" '+(stFiltExp==='ativo'?'selected':'')+'>Ativos</option>'+
-      '<option value="finalizado" '+(stFiltExp==='finalizado'?'selected':'')+'>Finalizados</option></select>'+
+      '<option value="">Todos</option>'+
+      '<option value="ativo" '+(stFiltExp==='ativo'?'selected':'')+'>Ativos</option>'+
+      '<option value="finalizado" '+(stFiltExp==='finalizado'?'selected':'')+'>Finalizados</option>'+
+      '<option value="pronto" '+(stFiltExp==='pronto'?'selected':'')+'>✅ Prontos p/ Expedição</option>'+
+      '<option value="antecipado" '+(stFiltExp==='antecipado'?'selected':'')+'>🔴 Faturados Antecipadamente</option>'+
+      '</select>'+
       '<select class="sselect" id="filt-exp-col" onchange="_expColeta=(this.value);renderExp()">'+
       '<option value="">Todas logísticas</option>'+
       '<option value="redespacho_sp" '+(_expColeta==='redespacho_sp'?'selected':'')+'>🚛 Redespacho SP</option>'+
@@ -3241,14 +3322,24 @@ function executeClearData(){
 }
 function renderUsers(){
   const d=gdb();
-  el('adm-c').innerHTML='<div class="card"><div class="card-header"><div class="card-title">Gestão de Usuários</div><button class="btn btn-green btn-sm" onclick="openUserForm()">+ Novo Usuário</button></div>'+
-    '<div class="tw"><table><thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Status</th><th></th></tr></thead><tbody>'+
-    d.users.map(u=>'<tr><td><strong>'+esc(u.name)+'</strong></td><td>'+esc(u.email)+'</td><td>'+rlabelUser(u)+'</td>'+
-      '<td>'+(u.pending?'<span class="bs bs-aguardando">Aguardando</span>':u.firstAccess?'<span class="bs bs-pendente">1º Acesso Pendente</span>':'<span class="bs bs-liberado">Ativo</span>')+'</td>'+
-      '<td><button class="btn btn-ghost btn-sm" onclick="openUserForm(\''+u.id+'\')">Editar</button> '+
-      (u.id!==S.id?'<button class="btn btn-danger btn-sm" onclick="delUser(\''+u.id+'\')">Excluir</button>':'')+' '+
-      (u.pending?'<button class="btn btn-outline btn-sm" onclick="approveUser(\''+u.id+'\')">Aprovar</button>':'')+
-      '</td></tr>').join('')+
+  const alerts=d.alerts||{};
+  el('adm-c').innerHTML='<div class="card"><div class="card-header"><div class="card-title">Gestão de Usuários</div>'+
+    '<div style="display:flex;gap:8px;align-items:center">'+
+    '<button class="btn btn-ghost btn-sm" style="color:var(--danger);border-color:rgba(239,68,68,.4)" onclick="forceLogoutAll()">🔴 Deslogar Todos</button>'+
+    '<button class="btn btn-green btn-sm" onclick="openUserForm()">+ Novo Usuário</button></div></div>'+
+    '<div class="tw"><table><thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Status</th><th>Alerta</th><th></th></tr></thead><tbody>'+
+    d.users.map(u=>{
+      const hasAlert=alerts[u.id]&&!alerts[u.id].read;
+      return'<tr><td><strong>'+esc(u.name)+'</strong></td><td>'+esc(u.email)+'</td><td>'+rlabelUser(u)+'</td>'+
+        '<td>'+(u.pending?'<span class="bs bs-aguardando">Aguardando</span>':u.firstAccess?'<span class="bs bs-pendente">1º Acesso Pendente</span>':'<span class="bs bs-liberado">Ativo</span>')+'</td>'+
+        '<td>'+(hasAlert?'<span class="bs bs-warn" style="font-size:11px">📢 Pendente</span>':'<span style="color:var(--muted);font-size:12px">—</span>')+'</td>'+
+        '<td style="white-space:nowrap"><button class="btn btn-ghost btn-sm" onclick="openUserForm(\''+u.id+'\')">Editar</button> '+
+        '<button class="btn btn-ghost btn-sm" style="color:#f59e0b;border-color:rgba(245,158,11,.4)" onclick="openAlertForm(\''+u.id+'\')">📢 Alerta</button> '+
+        (u.id!==S.id?'<button class="btn btn-ghost btn-sm" style="color:var(--danger);border-color:rgba(239,68,68,.4)" onclick="forceLogoutUser(\''+u.id+'\')">⏏ Deslogar</button> ':'  ')+
+        (u.id!==S.id?'<button class="btn btn-danger btn-sm" onclick="delUser(\''+u.id+'\')">Excluir</button>':'')+' '+
+        (u.pending?'<button class="btn btn-outline btn-sm" onclick="approveUser(\''+u.id+'\')">Aprovar</button>':'')+
+        '</td></tr>';
+    }).join('')+
     '</tbody></table></div></div>';
 }
 function openUserForm(id){
@@ -3374,6 +3465,9 @@ function closeGSearch(){
       // 1. Skip if a local save is in flight / queued / failed (would revert local changes)
       // 2. Skip within 15s of a successful save (grace period for server propagation)
       const _gracePassed=(Date.now()-_lastSaveAt)>15000;
+      // Check force logout before applying any data changes
+      _checkForceLogout(nd);
+      if(!S)return; // was force-logged out
       if(!_saveInProgress && _saveQueue===null && !_failedPayload && _gracePassed
          && JSON.stringify(nd)!==JSON.stringify(_db)){
         // Re-apply any local item status changes that are newer than what the server
@@ -3389,6 +3483,8 @@ function closeGSearch(){
         // If we re-applied local fixes, push the corrected data back to the server so
         // future syncs don't revert them again.
         if(JSON.stringify(nd)!==ndSnap) saveDBRemote(nd);
+        // Check for new unread alert
+        if(!el('M').classList.contains('open'))_checkAlert();
       }
       setSyncBadge(true);
     }catch{setSyncBadge(false);}
