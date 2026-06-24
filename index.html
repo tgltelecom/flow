@@ -1217,7 +1217,7 @@ function rSectorDashboard(cnt,role){
         '</div>'+
       '</div>'+
       '<div style="font-size:11px;color:var(--sub);text-align:right">'+
-        '<button class="btn btn-ghost btn-sm" onclick="rDashboard(el(\'acontent\'))">↻ Atualizar</button>'+
+        '<button class="btn btn-ghost btn-sm dash-refresh-btn" onclick="refreshDashboard()">↻ Atualizar</button>'+
       '</div>';
     return;
   }
@@ -1284,10 +1284,21 @@ function rSectorDashboard(cnt,role){
         '</div>'+
       '</div>'+
       '<div style="font-size:11px;color:var(--sub);text-align:right">'+
-        '<button class="btn btn-ghost btn-sm" onclick="rDashboard(el(\'acontent\'))">↻ Atualizar</button>'+
+        '<button class="btn btn-ghost btn-sm dash-refresh-btn" onclick="refreshDashboard()">↻ Atualizar</button>'+
       '</div>';
     return;
   }
+}
+async function refreshDashboard(){
+  // Busca dados frescos do servidor antes de re-renderizar
+  const cnt=el('acontent');
+  const btn=cnt.querySelector('.dash-refresh-btn');
+  if(btn){btn.disabled=true;btn.textContent='↻ Atualizando...';}
+  try{
+    const r=await _sf('/rest/v1/app_data?key=eq.tgl_v3&select=data');
+    if(r.ok){const rows=await r.json();if(rows&&rows.length)_db={...idb(),...rows[0].data};}
+  }catch{}
+  rDashboard(cnt);
 }
 function rDashboard(cnt){
   if(S){const _ur=_roles(S);if(isComprador()){rCompradorDashboard(cnt);return;}if(_ur.every(r=>['preformados','estamparia','espinar','expedicao'].includes(r))){rSectorDashboard(cnt,_ur[0]);return;}}
@@ -1611,7 +1622,7 @@ function rDashboard(cnt){
       '</div>'+
     '</div>'+
     '<div style="font-size:11px;color:var(--sub);text-align:right;margin-top:4px">'+
-      '<button class="btn btn-ghost btn-sm" onclick="rDashboard(el(\'acontent\'))">↻ Atualizar</button>'+
+      '<button class="btn btn-ghost btn-sm dash-refresh-btn" onclick="refreshDashboard()">↻ Atualizar</button>'+
     '</div>';
 }
 
