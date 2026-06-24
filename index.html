@@ -635,6 +635,16 @@ async function saveDBRemote(d){
           // stale item data — the merge gives OP-level priority, not item-level).
           _mergeItemStatuses(payload,merged);
           _checkConflicts(payload,merged);
+          // Passthrough: chaves que a função SQL merge_app_data não conhece.
+          // 1) Reaplica em _db para manter a sessão corrente.
+          // 2) Persiste no servidor via patch_app_data (fire-and-forget).
+          const _PT=['rawMaterials','packaging','suppliers','rawMaterialStock',
+            'packagingStock','rawMaterialMovements','packagingMovements','purchaseOrders'];
+          const _ptPatch={};
+          _PT.forEach(k=>{if(payload[k]!==undefined){merged[k]=payload[k];_ptPatch[k]=payload[k];}});
+          if(Object.keys(_ptPatch).length){
+            _sf('/rest/v1/rpc/patch_app_data',{method:'POST',body:JSON.stringify({p_key:'tgl_v3',p_patch:_ptPatch})}).catch(()=>{});
+          }
           // Only replace _db if no newer save is queued.
           // If _saveQueue has a newer payload, _db already reflects local changes
           // made after this RPC was sent — overwriting would lose those changes.
