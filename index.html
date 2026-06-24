@@ -1370,9 +1370,14 @@ function rDashboard(cnt){
     (p.sectors||[]).forEach(sec=>{
       if(!secs[sec])return;
       secs[sec].total++;
-      if(it.status==='liberado'||it.status==='revisao_qualidade')secs[sec].lib++;
-      else if(it.status==='em_producao')secs[sec].prod++;
-      else if(it.status==='materia_falta'||it.status==='aguardando_mp')secs[sec].blk++;
+      const st=it.status||'pendente';
+      if(st==='liberado'||st==='revisao_qualidade') secs[sec].lib++;
+      else if(st==='materia_falta'||st==='aguardando_mp'||st==='pref_ficha_falta') secs[sec].blk++;
+      // Em andamento: qualquer status que não seja pendente/aguardando nem bloqueio nem concluído
+      // Inclui: em_producao, producao_iniciada, pref_formadeira, pref_coladeira,
+      //         pref_pulverizadeira, pref_torcedeira, pref_dobradeira, e qualquer futuro
+      else if(st!=='pendente'&&st!=='aguardando_producao') secs[sec].prod++;
+      // 'pendente' e 'aguardando_producao' ficam como "pend" (total - lib - prod - blk)
     });
   }));
 
