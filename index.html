@@ -146,6 +146,7 @@ tbody tr:last-child td{border-bottom:none}
 .bs-finalizado{background:var(--success-bg);color:var(--success)}
 .bs-ativo{background:var(--info-bg);color:var(--info)}
 .bs-arquivado{background:rgba(100,116,139,.1);color:var(--muted)}
+.bs-iniciada{background:rgba(34,197,94,.12);color:#4ade80;border:1px solid rgba(34,197,94,.3)}
 .bs-cancelado{background:rgba(239,68,68,.1);color:var(--danger)}
 .bs-warn{background:rgba(245,158,11,.15);color:var(--warn);border:1px solid rgba(245,158,11,.3)}
 
@@ -534,8 +535,17 @@ if(typeof pdfjsLib!=='undefined') pdfjsLib.GlobalWorkerOptions.workerSrc='https:
 // ─── DB / SUPABASE ───
 const SUPA_URL='https://bobzfvyqqxapvoabtejl.supabase.co';
 const SUPA_KEY='sb_publishable_yyFwUYtK5D24yeAsd6jkjQ_UuizdNAA';
-const APP_VERSION='1.1.2';
+const APP_VERSION='1.3.0';
 const APP_CHANGELOG={
+  '1.3.0':[
+    'Novo perfil: Comprador — dashboard de compras, alertas de estoque crítico',
+    'Cadastro de Matéria Prima e Embalagens (código, nome, estoque mínimo)',
+    'Cadastro de Fornecedores (nome, CNPJ)',
+    'Controle de entradas e saídas de MP e Embalagens por nota fiscal / requisição',
+    'Inventário: ajuste pontual de quantidade por fornecedor',
+    'Suprimentos: Matéria Prima e Embalagens com status de estoque e drill-down por fornecedor',
+    'Alertas automáticos ao comprador: itens zerados e abaixo/próximo do mínimo',
+  ],
   '1.1.2':[
     'Admin: enviar alertas personalizados para usuários (aparecem ao entrar no sistema)',
     'Admin: forçar logout de usuário específico ou de todos',
@@ -743,7 +753,7 @@ function setSyncBadge(ok){
 
 function gdb(){return _db||idb();}
 function sdb(d){_db=d;try{localStorage.setItem('tgl_bk',JSON.stringify(d));}catch{}saveDBRemote(d);}
-function idb(){return{users:[{id:'u1',name:'Administrador',email:'admin@tgltelecom.com.br',password:'admin123',role:'admin',firstAccess:false,pending:false}],clients:[],products:[],ops:[],stock:{},seq:1000,presence:{},auditLog:[],alerts:{},forceLogout:{}};}
+function idb(){return{users:[{id:'u1',name:'Administrador',email:'admin@tgltelecom.com.br',password:'admin123',role:'admin',firstAccess:false,pending:false}],clients:[],products:[],ops:[],stock:{},seq:1000,presence:{},auditLog:[],alerts:{},forceLogout:{},rawMaterials:[],packaging:[],suppliers:[],rawMaterialStock:{},packagingStock:{},rawMaterialMovements:[],packagingMovements:[],purchaseOrders:[]};}
 function uid(){return '_'+Math.random().toString(36).substr(2,9);}
 function logAction(d,action,details){
   if(!S)return;
@@ -835,7 +845,7 @@ function startApp(u){
   el('huser').textContent=u.name+' · '+rlabelUser(u);
   buildNav();navFirst();
   // Show changelog modal if version changed, then check alerts
-  setTimeout(()=>{_checkChangelog(u);setTimeout(()=>_checkAlert(),600);},400);
+  setTimeout(()=>{_checkChangelog(u);setTimeout(()=>{_checkAlert();setTimeout(()=>{if(!el('M').classList.contains('open'))_checkStockAlerts();},800);},600);},400);
 }
 function _checkChangelog(u){
   const d=gdb();
@@ -855,7 +865,13 @@ function _checkChangelog(u){
 function _dismissChangelog(){
   const d=gdb();
   const ui=d.users.findIndex(x=>x.id===S.id);
-  if(ui>=0){d.users[ui].lastSeenVersion=APP_VERSION;sdb(d);}
+  if(ui>=0)d.users[ui].lastSeenVersion=APP_VERSION;
+  // Force logout de todos os outros ao detectar nova versão
+  if(!d.forceLogout)d.forceLogout={};
+  d.forceLogout._all=Date.now();
+  // Manter o próprio usuário logado gravando o _loginAt acima do trigger
+  if(S)d.forceLogout['_skip_'+S.id]=Date.now();
+  sdb(d);
   Mclose();
 }
 
@@ -924,8 +940,37 @@ function _checkForceLogout(nd){
   const fl=nd.forceLogout;
   const myFL=fl[S.id]||0;
   const allFL=fl._all||0;
+  const skipTs=fl['_skip_'+S.id]||0; // set when this user triggered the logout (version update)
   const trigger=Math.max(myFL,allFL);
-  if(trigger>_loginAt){doLogout();toast('Você foi deslogado pelo administrador.','info');}
+  const isVersionLogout=allFL>_loginAt&&allFL>skipTs&&allFL>=trigger;
+  if(trigger>_loginAt&&trigger>skipTs){
+    doLogout();
+    if(isVersionLogout){
+      // Pequeno delay para a tela de login renderizar antes de abrir o modal
+      setTimeout(()=>{
+        Mopen('🔄 Sistema Atualizado',
+          '<div style="text-align:center;padding:8px 0 16px">'+
+          '<div style="font-size:48px;margin-bottom:12px">🚀</div>'+
+          '<div style="font-size:17px;font-weight:700;color:var(--text);margin-bottom:8px">Nova versão disponível!</div>'+
+          '<div style="font-size:14px;color:var(--sub);line-height:1.6;margin-bottom:16px">'+
+          'O sistema foi atualizado e sua sessão foi encerrada automaticamente.<br>'+
+          'Antes de fazer login novamente, verifique se as últimas ações que você realizou foram concluídas corretamente.'+
+          '</div>'+
+          '<div class="alert alert-warn" style="font-size:13px;text-align:left;line-height:1.7">'+
+          '<strong>⚠️ O que verificar:</strong><br>'+
+          '• Alterações de status em itens de produção<br>'+
+          '• Lançamentos de estoque realizados<br>'+
+          '• Pedidos salvos ou modificados<br>'+
+          '• Expedições e faturamentos registrados'+
+          '</div>'+
+          '</div>',
+          '<button class="btn btn-green" style="min-width:180px" onclick="Mclose()">✅ Entendi — Fazer Login</button>'
+        );
+      },300);
+    }else{
+      toast('Você foi deslogado pelo administrador.','info');
+    }
+  }
 }
 
 function showLF(f){
@@ -946,6 +991,7 @@ function can(sec){
   const roles=_roles(S);
   if(roles.includes('admin'))return true;
   if(roles.includes('pcp'))return['dashboard','cadastros','pedidos','suprimentos','producao','expedicao'].includes(sec);
+  if(roles.includes('comprador'))return['dashboard','cadastros','suprimentos'].includes(sec);
   const allowed=new Set();
   roles.forEach(r=>{
     if(['preformados','estamparia','espinar'].includes(r))allowed.add('producao');
@@ -953,7 +999,8 @@ function can(sec){
   });
   return allowed.has(sec);
 }
-function rlabel(r){return{admin:'👑 Administrador',pcp:'📋 PCP',preformados:'🧵 Preformados',estamparia:'🔩 Estamparia',espinar:'🔌 Espinar/Fita',expedicao:'🚚 Expedição',pending:'⏳ Aguardando'}[r]||r;}
+function isComprador(){return S&&_roles(S).some(r=>r==='comprador')&&!_roles(S).includes('admin')&&!_roles(S).includes('pcp');}
+function rlabel(r){return{admin:'👑 Administrador',pcp:'📋 PCP',preformados:'🧵 Preformados',estamparia:'🔩 Estamparia',espinar:'🔌 Espinar/Fita',expedicao:'🚚 Expedição',comprador:'🛒 Comprador',pending:'⏳ Aguardando'}[r]||r;}
 function rlabelUser(u){return _roles(u).map(r=>rlabel(r)).join(' + ');}
 
 // ─── NAV ───
@@ -982,7 +1029,7 @@ function buildNav(){
 
 function navFirst(){
   const roles=_roles(S);
-  if(roles.some(r=>r==='admin'||r==='pcp'))goTab('dashboard');
+  if(roles.some(r=>r==='admin'||r==='pcp'||r==='comprador'))goTab('dashboard');
   else if(roles.some(r=>['preformados','estamparia','espinar'].includes(r)))goTab('producao');
   else goTab('expedicao');
 }
@@ -1055,8 +1102,8 @@ function diasChip(dateStr,status){
   return'<span class="dc dc-ok">📅 faltam '+d+' dias</span>';
 }
 
-function stclass(s){return{pendente:'bs-pendente',materia_falta:'bs-falta',aguardando_mp:'bs-aguardando',em_producao:'bs-producao',revisao_qualidade:'bs-revisao',liberado:'bs-liberado',finalizado:'bs-finalizado',pref_formadeira:'bs-producao',pref_coladeira:'bs-producao',pref_pulverizadeira:'bs-producao',pref_torcedeira:'bs-producao',pref_dobradeira:'bs-producao',pref_ficha_falta:'bs-falta'}[s]||'bs-pendente';}
-function stlabel(s){return{pendente:'⏳ Pendente',materia_falta:'🚫 Mat.-prima em falta',aguardando_mp:'⏸️ Aguardando MP',em_producao:'🔄 Em produção',revisao_qualidade:'🔍 Revisão de qualidade',liberado:'✅ Liberado',finalizado:'🏁 Finalizado',pref_formadeira:'🔧 Formadeira/Montadeira',pref_coladeira:'🪄 Coladeira',pref_pulverizadeira:'💨 Pulverizadeira',pref_torcedeira:'🌀 Torcedeira',pref_dobradeira:'📦 Dobradeira/Embalagem',pref_ficha_falta:'📄 Ficha de produção em falta',despachado_parcial:'📦 Despachado (Parcial)'}[s]||s||'—';}
+function stclass(s){return{pendente:'bs-pendente',materia_falta:'bs-falta',aguardando_mp:'bs-aguardando',em_producao:'bs-producao',producao_iniciada:'bs-iniciada',revisao_qualidade:'bs-revisao',liberado:'bs-liberado',finalizado:'bs-finalizado',pref_formadeira:'bs-producao',pref_coladeira:'bs-producao',pref_pulverizadeira:'bs-producao',pref_torcedeira:'bs-producao',pref_dobradeira:'bs-producao',pref_ficha_falta:'bs-falta'}[s]||'bs-pendente';}
+function stlabel(s){return{pendente:'⏳ Pendente',materia_falta:'🚫 Mat.-prima em falta',aguardando_mp:'⏸️ Aguardando MP',producao_iniciada:'🟢 Produção iniciada',em_producao:'🔄 Em produção',revisao_qualidade:'🔍 Revisão de qualidade',liberado:'✅ Liberado',finalizado:'🏁 Finalizado',pref_formadeira:'🔧 Formadeira/Montadeira',pref_coladeira:'🪄 Coladeira',pref_pulverizadeira:'💨 Pulverizadeira',pref_torcedeira:'🌀 Torcedeira',pref_dobradeira:'📦 Dobradeira/Embalagem',pref_ficha_falta:'📄 Ficha de produção em falta',despachado_parcial:'📦 Despachado (Parcial)'}[s]||s||'—';}
 
 function autoArchive(){
   const d=gdb();let ch=false;
@@ -1194,7 +1241,7 @@ function rSectorDashboard(cnt,role){
   }
 }
 function rDashboard(cnt){
-  if(S){const _ur=_roles(S);if(_ur.every(r=>['preformados','estamparia','espinar','expedicao'].includes(r))){rSectorDashboard(cnt,_ur[0]);return;}}
+  if(S){const _ur=_roles(S);if(isComprador()){rCompradorDashboard(cnt);return;}if(_ur.every(r=>['preformados','estamparia','espinar','expedicao'].includes(r))){rSectorDashboard(cnt,_ur[0]);return;}}
   const d=gdb();
   const now=new Date();now.setHours(0,0,0,0);
 
@@ -1485,14 +1532,22 @@ function rDashboard(cnt){
 }
 
 // ═══════════════════════════════════
-function rCadastros(el){
-  el.innerHTML='<div class="ptitle">Cadastros</div><div class="stabs"><button class="stab on" id="st-prod" onclick="stab(\'prod\')">Produtos</button><button class="stab" id="st-cli" onclick="stab(\'cli\')">Clientes</button></div><div id="stcontent"></div>';
-  tabProd();
+function rCadastros(cnt){
+  const isCmp=isComprador();
+  const tabs=isCmp
+    ?'<button class="stab on" id="st-mp" onclick="stab(\'mp\')">🌿 Matéria Prima</button><button class="stab" id="st-emb" onclick="stab(\'emb\')">📦 Embalagens</button><button class="stab" id="st-forn" onclick="stab(\'forn\')">🏭 Fornecedores</button>'
+    :'<button class="stab on" id="st-prod" onclick="stab(\'prod\')">Produtos</button><button class="stab" id="st-cli" onclick="stab(\'cli\')">Clientes</button><button class="stab" id="st-mp" onclick="stab(\'mp\')">🌿 Matéria Prima</button><button class="stab" id="st-emb" onclick="stab(\'emb\')">📦 Embalagens</button><button class="stab" id="st-forn" onclick="stab(\'forn\')">🏭 Fornecedores</button>';
+  cnt.innerHTML='<div class="ptitle">Cadastros</div><div class="stabs">'+tabs+'</div><div id="stcontent"></div>';
+  if(isCmp)tabCadMP();else tabProd();
 }
 function stab(t){
   document.querySelectorAll('.stab').forEach(b=>b.classList.remove('on'));
   el('st-'+t).classList.add('on');
-  if(t==='prod')tabProd();else tabCli();
+  if(t==='prod')tabProd();
+  else if(t==='cli')tabCli();
+  else if(t==='mp')tabCadMP();
+  else if(t==='emb')tabCadEmb();
+  else if(t==='forn')tabCadForn();
 }
 
 // _prodSort already declared above
@@ -2483,9 +2538,22 @@ function setSupSort(col){if(_supSort.col===col)_supSort.dir*=-1;else{_supSort.co
 function supArrow(col){return _supSort.col===col?(_supSort.dir===1?' ▲':' ▼'):'<span style="opacity:.3"> ⇅</span>';}
 
 function rSuprimentos(cnt){
-  cnt.innerHTML='<div class="ptitle">📦 Controle de Estoque</div><div id="sup-c"></div>';
+  const isCmp=isComprador();
+  const tabs=isCmp
+    ?'<button class="stab on" id="sst-mp" onclick="sstab(\'mp\')">🌿 Matéria Prima</button><button class="stab" id="sst-emb" onclick="sstab(\'emb\')">📦 Embalagens</button><button class="stab" id="sst-est" onclick="sstab(\'est\')">🏷️ Estoque Produtos</button>'
+    :'<button class="stab on" id="sst-est" onclick="sstab(\'est\')">🏷️ Estoque</button><button class="stab" id="sst-mp" onclick="sstab(\'mp\')">🌿 Matéria Prima</button><button class="stab" id="sst-emb" onclick="sstab(\'emb\')">📦 Embalagens</button>';
+  cnt.innerHTML='<div class="ptitle">📦 Suprimentos</div><div class="stabs">'+tabs+'</div><div id="sup-tabs-c"></div>';
   _supFilter='';_supSort={col:'name',dir:1};
-  renderEstoque();
+  if(isCmp)sstab('mp');else sstab('est');
+}
+function sstab(t){
+  document.querySelectorAll('#sup-tabs-c').forEach(()=>{});
+  document.querySelectorAll('.stab').forEach(b=>{if(b.id&&b.id.startsWith('sst-'))b.classList.remove('on');});
+  if(el('sst-'+t))el('sst-'+t).classList.add('on');
+  const c=el('sup-tabs-c');c.innerHTML='<div id="sup-c"></div>';
+  if(t==='est'){_supFilter='';renderEstoque();}
+  else if(t==='mp')renderSupMP();
+  else if(t==='emb')renderSupEmb();
 }
 function renderEstoque(){
   const d=gdb(),el2=el('sup-c');
@@ -2620,6 +2688,7 @@ const STOPS=[
 ];
 const STOPS_PREFORMADOS=[
   {v:'pendente',l:'⏳ Aguardando produção'},
+  {v:'producao_iniciada',l:'🟢 Produção iniciada'},
   {v:'pref_formadeira',l:'🔧 Formadeira/Montadeira'},
   {v:'pref_coladeira',l:'🪄 Coladeira'},
   {v:'pref_pulverizadeira',l:'💨 Pulverizadeira'},
@@ -2893,13 +2962,14 @@ function renderSeparacao(){
 }
 
 function updStSep(opId,idx,status){
+  if(_BATCH_TRIGGER.includes(status)){
+    _showBatchDialog(opId,idx,status,'separacao',()=>renderSeparacao());
+    return;
+  }
   const d=gdb();
   const oi=d.ops.findIndex(o=>o.id===opId);
   if(oi<0)return;
-  d.ops[oi].items[idx].status=status;
-  d.ops[oi].items[idx].statusAt=Date.now(); // timestamp para merge item-level
-  if(!d.ops[oi].items[idx].stageLog)d.ops[oi].items[idx].stageLog=[];
-  d.ops[oi].items[idx].stageLog.push({status,at:Date.now()});
+  _applyStatusCore(d,opId,idx,status);
   const _opp=d.ops[oi];const _itp=_opp.items[idx];const _prp=d.products.find(x=>x.id===_itp.pid);
   logAction(d,'Status separação','OP #'+_opp.opNum+' — '+(_prp?_prp.name:_itp.productName)+': '+stlabel(status));
   sdb(d);toast('Status atualizado','ok',1500);
@@ -3368,7 +3438,7 @@ function renderUsers(){
 function openUserForm(id){
   const d=gdb(),u=id?d.users.find(x=>x.id===id):null;
   const roleOpts=[{v:'admin',l:'👑 Administrador'},{v:'pcp',l:'📋 PCP'},{v:'preformados',l:'🧵 Preformados'},
-    {v:'estamparia',l:'🔩 Estamparia'},{v:'espinar',l:'🔌 Espinar/Fita'},{v:'expedicao',l:'🚚 Expedição'}];
+    {v:'estamparia',l:'🔩 Estamparia'},{v:'espinar',l:'🔌 Espinar/Fita'},{v:'expedicao',l:'🚚 Expedição'},{v:'comprador',l:'🛒 Comprador'}];
   const userRoles=_roles(u||{role:'preformados'});
   Mopen(u?'Editar Usuário':'Novo Usuário',
     '<div class="fg"><label>Nome *</label><input type="text" id="uf-name" value="'+esc(u?u.name:'')+'"></div>'+
@@ -3579,17 +3649,105 @@ function closeFocusMode(){
   el('focus-overlay').style.display='none';
   document.body.style.overflow='';
 }
-function chStatus(opId,idx,status,sec){
+// ─── Statuses que disparam o diálogo de lote ───
+const _BATCH_TRIGGER=['producao_iniciada','em_producao'];
+
+let _batchPending=null; // {items:[{opId,itemIdx}], status, sec, renderFn}
+
+function _applyStatusCore(d,opId,itemIdx,status){
+  const oi=d.ops.findIndex(o=>o.id===opId);if(oi<0)return;
+  d.ops[oi].items[itemIdx].status=status;
+  d.ops[oi].items[itemIdx].statusAt=Date.now();
+  if(!d.ops[oi].items[itemIdx].stageLog)d.ops[oi].items[itemIdx].stageLog=[];
+  d.ops[oi].items[itemIdx].stageLog.push({status,at:Date.now()});
+}
+
+function _findOtherOPsWithProduct(pid,currentOpId,status){
   const d=gdb();
-  const oi=d.ops.findIndex(o=>o.id===opId);
-  if(oi<0)return;
-  d.ops[oi].items[idx].status=status;
-  if(!d.ops[oi].items[idx].stageLog)d.ops[oi].items[idx].stageLog=[];
-  d.ops[oi].items[idx].stageLog.push({status,at:Date.now()});
-  const _cop=d.ops[oi];const _cit=_cop.items[idx];const _cpr=d.products.find(x=>x.id===_cit.pid);
-  logAction(d,'Status alterado (foco)','OP #'+_cop.opNum+' — '+(_cpr?_cpr.name:_cit.productName)+': '+stlabel(status));
-  sdb(d);toast('Status atualizado','ok',1200);
-  renderFocusContent(sec);
+  const now=new Date();now.setHours(0,0,0,0);
+  const result=[];
+  d.ops.filter(o=>!o.archived&&o.status==='ativo'&&o.id!==currentOpId).forEach(op=>{
+    op.items.forEach((it,itIdx)=>{
+      if(it.pid===pid&&it.status!=='liberado'&&it.status!==status&&!_itemFullyDisp(it)){
+        const p=d.products.find(x=>x.id===pid);
+        const daysLeft=op.deliveryDate?Math.ceil((new Date(op.deliveryDate+'T00:00:00')-now)/86400000):null;
+        result.push({opId:op.id,itemIdx:itIdx,opNum:op.opNum,clientName:op.clientName,
+          sku:p?p.sku:'',productName:p?p.name:it.productName||'',
+          qty:it.qty,unit:it.unit||'PC',daysLeft,deliveryDate:op.deliveryDate});
+      }
+    });
+  });
+  return result;
+}
+
+function _showBatchDialog(opId,itemIdx,status,sec,renderFn){
+  const d=gdb();
+  const oi=d.ops.findIndex(o=>o.id===opId);if(oi<0)return;
+  const item=d.ops[oi].items[itemIdx];
+  const others=_findOtherOPsWithProduct(item.pid,opId,status);
+  // Sem outros pedidos: aplica direto
+  if(!others.length){_commitStatus(opId,itemIdx,status,sec,renderFn,[]);return;}
+  _batchPending={opId,itemIdx,status,sec,renderFn,others};
+  const statusLbl=sec==='separacao'?'📤 Em Separação':stlabel(status);
+  const p=d.products.find(x=>x.id===item.pid);
+  const prodName=p?p.name:item.productName||'';
+  const listRows=others.map(o=>{
+    const dLabel=o.daysLeft===null?'<span style="color:var(--muted)">—</span>':o.daysLeft<0?'<span style="color:var(--danger);font-weight:700">'+Math.abs(o.daysLeft)+' dias ATRASADO</span>':o.daysLeft===0?'<span style="color:var(--warn);font-weight:700">Hoje</span>':'<span style="color:'+(o.daysLeft<=3?'var(--warn)':'var(--text)')+'">'+o.daysLeft+' dia(s)</span>';
+    return'<tr>'+
+      '<td><span class="sku">'+esc(o.sku||'—')+'</span></td>'+
+      '<td><strong>'+esc(o.productName)+'</strong></td>'+
+      '<td>#'+esc(o.opNum)+'<div style="font-size:11px;color:var(--muted)">'+esc(o.clientName)+'</div></td>'+
+      '<td style="text-align:center;font-weight:700">'+fnum(o.qty)+' '+esc(o.unit)+'</td>'+
+      '<td style="text-align:center">'+dLabel+'</td>'+
+    '</tr>';
+  }).join('');
+  Mopen('📋 Programação em Conjunto',
+    '<div class="alert alert-info" style="margin-bottom:14px;font-size:13px">'+
+    'Você está alterando <strong>'+esc(prodName)+'</strong> para <strong>'+statusLbl+'</strong>.<br>'+
+    'Os seguintes pedidos também têm este produto em aberto:</div>'+
+    '<div class="tw" style="max-height:280px;overflow-y:auto"><table>'+
+    '<thead><tr><th>SKU</th><th>Produto</th><th>OP</th><th style="text-align:center">Qtd</th><th style="text-align:center">Prazo</th></tr></thead>'+
+    '<tbody>'+listRows+'</tbody></table></div>'+
+    '<div style="font-size:13px;color:var(--text);margin-top:14px;font-weight:600">Deseja alterar o status de todos para <em>'+statusLbl+'</em>?</div>',
+    '<button class="btn btn-ghost" onclick="_commitBatch(false)">Não — só esta OP</button>'+
+    '<button class="btn btn-green" onclick="_commitBatch(true)">✅ Sim — iniciar todas</button>'
+  );
+}
+
+function _commitBatch(applyAll){
+  if(!_batchPending)return;
+  const {opId,itemIdx,status,sec,renderFn,others}=_batchPending;
+  _batchPending=null;
+  Mclose();
+  _commitStatus(opId,itemIdx,status,sec,renderFn,applyAll?others:[]);
+}
+
+function _commitStatus(opId,itemIdx,status,sec,renderFn,batch){
+  const d=gdb();
+  _applyStatusCore(d,opId,itemIdx,status);
+  const _cop=d.ops.find(o=>o.id===opId);const _cit=_cop?_cop.items[itemIdx]:null;const _cpr=_cit?d.products.find(x=>x.id===_cit.pid):null;
+  logAction(d,'Status alterado','OP #'+(_cop?_cop.opNum:opId)+' — '+(_cpr?_cpr.name:_cit?_cit.productName:'')+': '+stlabel(status));
+  batch.forEach(b=>{
+    _applyStatusCore(d,b.opId,b.itemIdx,status);
+    const bOp=d.ops.find(o=>o.id===b.opId);
+    logAction(d,'Status em lote','OP #'+(bOp?bOp.opNum:b.opId)+' — '+b.productName+': '+stlabel(status));
+  });
+  sdb(d);
+  toast(batch.length?'Status aplicado em '+(batch.length+1)+' pedido(s)':'Status atualizado','ok',1800);
+  renderFn();
+}
+
+function chStatus(opId,idx,status,sec){
+  const renderFn=()=>renderFocusContent(sec);
+  if(_BATCH_TRIGGER.includes(status)&&sec!=='espinar'){
+    _showBatchDialog(opId,idx,status,sec,renderFn);
+  }else{
+    const d=gdb();
+    _applyStatusCore(d,opId,idx,status);
+    const _cop=d.ops.find(o=>o.id===opId);const _cit=_cop?_cop.items[idx]:null;const _cpr=_cit?d.products.find(x=>x.id===_cit.pid):null;
+    logAction(d,'Status alterado (foco)','OP #'+(_cop?_cop.opNum:opId)+' — '+(_cpr?_cpr.name:_cit?_cit.productName:'')+': '+stlabel(status));
+    sdb(d);toast('Status atualizado','ok',1200);renderFn();
+  }
 }
 function renderFocusContent(sec){
   const d=gdb();
@@ -3632,6 +3790,745 @@ function renderFocusContent(sec){
       '<table style="width:100%"><thead><tr><th style="padding:8px 10px;font-size:11px;color:var(--muted);text-align:left">Produto</th><th style="padding:8px 10px;font-size:11px;color:var(--muted)">Status</th></tr></thead><tbody>'+rows+'</tbody></table>'+
     '</div>';
   }).join('');
+}
+
+// ═══════════════════════════════════════════════════════════
+// ── MATÉRIA PRIMA, EMBALAGENS E FORNECEDORES ────────────────
+// ═══════════════════════════════════════════════════════════
+
+// ─── HELPERS DE ID ───
+function _nid(){return'id'+Date.now().toString(36)+Math.random().toString(36).slice(2,7);}
+
+// ─── HELPERS DE ESTOQUE MP ───
+function _rmStockTotal(d,mid){const s=d.rawMaterialStock[mid];if(!s)return 0;return s.total||0;}
+function _rmStockBySupp(d,mid,sid){const s=d.rawMaterialStock[mid];if(!s)return 0;return(s.bySupplier||{})[sid]||0;}
+function _updateRMStock(d,mid,sid,delta){
+  if(!d.rawMaterialStock[mid])d.rawMaterialStock[mid]={total:0,bySupplier:{}};
+  const s=d.rawMaterialStock[mid];
+  s.bySupplier[sid]=(s.bySupplier[sid]||0)+delta;
+  if(s.bySupplier[sid]<0)s.bySupplier[sid]=0;
+  s.total=Object.values(s.bySupplier).reduce((a,b)=>a+b,0);
+}
+function _setRMStock(d,mid,sid,qty){
+  if(!d.rawMaterialStock[mid])d.rawMaterialStock[mid]={total:0,bySupplier:{}};
+  const s=d.rawMaterialStock[mid];
+  s.bySupplier[sid]=Math.max(0,qty);
+  s.total=Object.values(s.bySupplier).reduce((a,b)=>a+b,0);
+}
+function _updatePackStock(d,pid,delta){
+  d.packagingStock[pid]=(d.packagingStock[pid]||0)+delta;
+  if(d.packagingStock[pid]<0)d.packagingStock[pid]=0;
+}
+function _setPackStock(d,pid,qty){d.packagingStock[pid]=Math.max(0,qty);}
+function _rmHasMovements(d,mid){return(d.rawMaterialMovements||[]).some(m=>m.itemId===mid);}
+function _packHasMovements(d,pid){return(d.packagingMovements||[]).some(m=>m.itemId===pid);}
+
+// ─── STATUS DE ESTOQUE (para semáforo) ───
+// retorna: 'zero' | 'abaixo' | 'proximo' | 'ok' | 'sem_lancamento'
+function _rmStatus(d,mid){
+  const item=d.rawMaterials.find(x=>x.id===mid);if(!item)return'sem_lancamento';
+  if(!_rmHasMovements(d,mid))return'sem_lancamento';
+  const qty=_rmStockTotal(d,mid);
+  const min=item.minStock||0;
+  if(qty===0)return'zero';
+  if(min>0&&qty<min)return'abaixo';
+  if(min>0&&qty<=min*1.2)return'proximo';
+  return'ok';
+}
+function _packStatus(d,pid){
+  const item=d.packaging.find(x=>x.id===pid);if(!item)return'sem_lancamento';
+  if(!_packHasMovements(d,pid))return'sem_lancamento';
+  const qty=d.packagingStock[pid]||0;
+  const min=item.minStock||0;
+  if(qty===0)return'zero';
+  if(min>0&&qty<min)return'abaixo';
+  if(min>0&&qty<=min*1.2)return'proximo';
+  return'ok';
+}
+function _stockBadge(status,qty,min){
+  if(status==='sem_lancamento')return'<span class="bs" style="background:rgba(100,116,139,.1);color:var(--muted);font-size:11px">Sem lançamento</span>';
+  if(status==='zero')return'<span class="bs" style="background:rgba(239,68,68,.15);color:var(--danger);border:1px solid rgba(239,68,68,.3);font-size:11px">🔴 Zerado</span>';
+  if(status==='abaixo')return'<span class="bs" style="background:rgba(245,158,11,.15);color:var(--warn);border:1px solid rgba(245,158,11,.3);font-size:11px">⚠️ Abaixo do mínimo</span>';
+  if(status==='proximo')return'<span class="bs" style="background:rgba(245,158,11,.08);color:var(--warn);font-size:11px">⚡ Próximo do mínimo</span>';
+  return'<span class="bs" style="background:rgba(34,197,94,.1);color:var(--green);font-size:11px">✅ Ok</span>';
+}
+
+// ═══════════════════════════════════════════════
+// ── CADASTRO: MATÉRIA PRIMA ─────────────────────
+// ═══════════════════════════════════════════════
+// ─── Helpers de label Setor / Tipo ───
+const _SETORES=[{v:'preformados',l:'🧵 Preformados'},{v:'estamparia',l:'🔩 Estamparia'},{v:'espinar',l:'🔌 Espinar/Fita'},{v:'expedicao',l:'🚚 Expedição'},{v:'outros',l:'🔖 Outros'}];
+function _setorLabel(setor,setorCustom){if(!setor)return'—';const s=_SETORES.find(x=>x.v===setor);return s?(setor==='outros'&&setorCustom?setorCustom:s.l.split(' ').slice(1).join(' ')):setor;}
+function _tipoLabel(tipo){return tipo==='emb'?'📦 Embalagem':'🌿 Matéria Prima';}
+function _setorOpts(sel){return _SETORES.map(s=>'<option value="'+s.v+'"'+(sel===s.v?' selected':'')+'>'+s.l+'</option>').join('');}
+function _setorCustomField(prefixId,sel){return'<div class="fg" id="fg-setor-custom-'+prefixId+'" style="display:'+(sel==='outros'?'block':'none')+'"><label>Especifique o setor *</label><input type="text" id="'+prefixId+'-setor-custom" placeholder="Nome do setor"></div>';}
+
+function tabCadMP(){
+  const sc=el('stcontent');
+  sc.innerHTML='<div class="card">'+
+    '<div class="card-header"><div class="card-title">🌿 Matérias-Primas Cadastradas</div>'+
+    '<button class="btn btn-green btn-sm" onclick="openRMForm()">+ Nova Matéria-Prima</button></div>'+
+    '<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">'+
+    '<input class="sinput" id="rm-srch" placeholder="🔍 Buscar por código ou nome..." oninput="_filterRMTable()" style="flex:1;min-width:180px;max-width:320px">'+
+    '<select class="sselect" id="rm-flt-setor" onchange="_filterRMTable()"><option value="">Todos os setores</option>'+_SETORES.map(s=>'<option value="'+s.v+'">'+s.l+'</option>').join('')+'</select>'+
+    '</div>'+
+    '<div class="tw" id="rm-tbl"></div></div>';
+  _filterRMTable();
+}
+function _filterRMTable(){
+  const d=gdb(),t=el('rm-tbl');if(!t)return;
+  const q=(el('rm-srch')?el('rm-srch').value.trim().toLowerCase():'');
+  const fSetor=el('rm-flt-setor')?el('rm-flt-setor').value:'';
+  let items=[...d.rawMaterials];
+  if(q)items=items.filter(m=>m.name.toLowerCase().includes(q)||(m.code||'').toLowerCase().includes(q));
+  if(fSetor)items=items.filter(m=>m.setor===fSetor);
+  _renderRMTable(items);
+}
+function _renderRMTable(items){
+  const d=gdb(),t=el('rm-tbl');if(!t)return;
+  if(items===undefined)items=d.rawMaterials;
+  if(!items.length){t.innerHTML='<div class="empty"><div class="ei">🌿</div><p>Nenhuma matéria-prima encontrada</p></div>';return;}
+  t.innerHTML='<table><thead><tr><th>Código</th><th>Nome</th><th>Tipo</th><th>Setor</th><th>Est. Mínimo</th><th></th></tr></thead><tbody>'+
+    items.map(m=>'<tr>'+
+      '<td><span class="sku">'+esc(m.code)+'</span></td>'+
+      '<td><strong>'+esc(m.name)+'</strong></td>'+
+      '<td><span class="bs" style="font-size:11px">'+_tipoLabel(m.tipo||'mp')+'</span></td>'+
+      '<td>'+(m.setor?'<span class="bs" style="font-size:11px">'+esc(_setorLabel(m.setor,m.setorCustom))+'</span>':'<span style="color:var(--muted)">—</span>')+'</td>'+
+      '<td>'+(m.minStock?fnum(m.minStock)+' un':'<span style="color:var(--muted)">—</span>')+'</td>'+
+      '<td style="white-space:nowrap">'+
+        '<button class="btn btn-ghost btn-sm" onclick="openRMForm(\''+m.id+'\')">Editar</button> '+
+        (S&&_roles(S).includes('admin')?'<button class="btn btn-danger btn-sm" onclick="delRM(\''+m.id+'\')">Excluir</button>':'')+
+      '</td></tr>'
+    ).join('')+'</tbody></table>';
+}
+function openRMForm(id){
+  const d=gdb(),m=id?d.rawMaterials.find(x=>x.id===id):null;
+  const setorSel=m?m.setor:'';
+  Mopen(m?'Editar Matéria-Prima':'Nova Matéria-Prima',
+    '<div class="fgrid">'+
+    '<div class="fg"><label>Código *</label><input type="text" id="rm-code" value="'+esc(m?m.code:'')+'" placeholder="Ex: MP-001"></div>'+
+    '<div class="fg"><label>Estoque Mínimo</label><input type="number" id="rm-min" value="'+(m&&m.minStock?m.minStock:'')+'" placeholder="0" min="0"></div>'+
+    '</div>'+
+    '<div class="fg"><label>Nome *</label><input type="text" id="rm-name" value="'+esc(m?m.name:'')+'" placeholder="Ex: Arame Galvanizado"></div>'+
+    '<div class="fgrid">'+
+    '<div class="fg"><label>Setor</label><select id="rm-setor" onchange="_toggleSetorCustom(\'rm\')"><option value="">Selecione...</option>'+_setorOpts(setorSel)+'</select></div>'+
+    '</div>'+
+    _setorCustomField('rm',setorSel).replace('id="rm-setor-custom"','id="rm-setor-custom" value="'+esc(m?m.setorCustom||'':'')+'\"'),
+    '<button class="btn btn-ghost" onclick="Mclose()">Cancelar</button>'+
+    '<button class="btn btn-green" onclick="saveRM(\''+( id||'')+'\')">Salvar</button>'
+  );
+}
+function _toggleSetorCustom(prefix){
+  const sel=el(prefix+'-setor');const fg=el('fg-setor-custom-'+prefix);
+  if(fg)fg.style.display=sel&&sel.value==='outros'?'block':'none';
+}
+function saveRM(id){
+  const code=v('rm-code').trim(),name=v('rm-name').trim(),min=parseInt(v('rm-min'))||0;
+  const setor=v('rm-setor')||'';
+  const setorCustom=setor==='outros'?(v('rm-setor-custom')||'').trim():'';
+  if(!code||!name){toast('Código e nome obrigatórios','err');return;}
+  if(setor==='outros'&&!setorCustom){toast('Especifique o setor','err');return;}
+  const d=gdb();
+  const obj={code,name,minStock:min||undefined,tipo:'mp',setor:setor||undefined,setorCustom:setorCustom||undefined};
+  if(id){
+    const idx=d.rawMaterials.findIndex(x=>x.id===id);
+    if(idx>=0)d.rawMaterials[idx]={...d.rawMaterials[idx],...obj};
+  }else{
+    if(d.rawMaterials.some(x=>x.code.toLowerCase()===code.toLowerCase())){toast('Código já cadastrado','err');return;}
+    d.rawMaterials.push({id:_nid(),createdAt:Date.now(),...obj});
+  }
+  sdb(d);Mclose();toast(id?'Matéria-prima atualizada':'Matéria-prima cadastrada','ok');_filterRMTable();
+}
+function delRM(id){
+  if(!confirm('Excluir esta matéria-prima?'))return;
+  const d=gdb();d.rawMaterials=d.rawMaterials.filter(x=>x.id!==id);
+  delete d.rawMaterialStock[id];
+  d.rawMaterialMovements=(d.rawMaterialMovements||[]).filter(m=>m.itemId!==id);
+  sdb(d);toast('Excluída','ok');_renderRMTable();
+}
+
+// ═══════════════════════════════════════════════
+// ── CADASTRO: EMBALAGENS ────────────────────────
+// ═══════════════════════════════════════════════
+function tabCadEmb(){
+  const sc=el('stcontent');
+  sc.innerHTML='<div class="card">'+
+    '<div class="card-header"><div class="card-title">📦 Embalagens Cadastradas</div>'+
+    '<button class="btn btn-green btn-sm" onclick="openEmbForm()">+ Nova Embalagem</button></div>'+
+    '<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">'+
+    '<input class="sinput" id="emb-srch" placeholder="🔍 Buscar por código ou nome..." oninput="_filterEmbTable()" style="flex:1;min-width:180px;max-width:320px">'+
+    '<select class="sselect" id="emb-flt-setor" onchange="_filterEmbTable()"><option value="">Todos os setores</option>'+_SETORES.map(s=>'<option value="'+s.v+'">'+s.l+'</option>').join('')+'</select>'+
+    '</div>'+
+    '<div class="tw" id="emb-tbl"></div></div>';
+  _filterEmbTable();
+}
+function _filterEmbTable(){
+  const d=gdb(),t=el('emb-tbl');if(!t)return;
+  const q=(el('emb-srch')?el('emb-srch').value.trim().toLowerCase():'');
+  const fSetor=el('emb-flt-setor')?el('emb-flt-setor').value:'';
+  let items=[...d.packaging];
+  if(q)items=items.filter(p=>p.name.toLowerCase().includes(q)||(p.code||'').toLowerCase().includes(q));
+  if(fSetor)items=items.filter(p=>p.setor===fSetor);
+  _renderEmbTable(items);
+}
+function _renderEmbTable(items){
+  const d=gdb(),t=el('emb-tbl');if(!t)return;
+  if(items===undefined)items=d.packaging;
+  if(!items.length){t.innerHTML='<div class="empty"><div class="ei">📦</div><p>Nenhuma embalagem encontrada</p></div>';return;}
+  t.innerHTML='<table><thead><tr><th>Código</th><th>Nome</th><th>Tipo</th><th>Setor</th><th>Est. Mínimo</th><th></th></tr></thead><tbody>'+
+    items.map(p=>'<tr>'+
+      '<td><span class="sku">'+esc(p.code)+'</span></td>'+
+      '<td><strong>'+esc(p.name)+'</strong></td>'+
+      '<td><span class="bs" style="font-size:11px">'+_tipoLabel('emb')+'</span></td>'+
+      '<td>'+(p.setor?'<span class="bs" style="font-size:11px">'+esc(_setorLabel(p.setor,p.setorCustom))+'</span>':'<span style="color:var(--muted)">—</span>')+'</td>'+
+      '<td>'+(p.minStock?fnum(p.minStock)+' un':'<span style="color:var(--muted)">—</span>')+'</td>'+
+      '<td style="white-space:nowrap">'+
+        '<button class="btn btn-ghost btn-sm" onclick="openEmbForm(\''+p.id+'\')">Editar</button> '+
+        (S&&_roles(S).includes('admin')?'<button class="btn btn-danger btn-sm" onclick="delEmb(\''+p.id+'\')">Excluir</button>':'')+
+      '</td></tr>'
+    ).join('')+'</tbody></table>';
+}
+function openEmbForm(id){
+  const d=gdb(),p=id?d.packaging.find(x=>x.id===id):null;
+  const setorSel=p?p.setor:'';
+  Mopen(p?'Editar Embalagem':'Nova Embalagem',
+    '<div class="fgrid">'+
+    '<div class="fg"><label>Código *</label><input type="text" id="emb-code" value="'+esc(p?p.code:'')+'" placeholder="Ex: EMB-001"></div>'+
+    '<div class="fg"><label>Estoque Mínimo</label><input type="number" id="emb-min" value="'+(p&&p.minStock?p.minStock:'')+'" placeholder="0" min="0"></div>'+
+    '</div>'+
+    '<div class="fg"><label>Nome *</label><input type="text" id="emb-name" value="'+esc(p?p.name:'')+'" placeholder="Ex: Caixa Papelão 30x20x10"></div>'+
+    '<div class="fgrid">'+
+    '<div class="fg"><label>Setor</label><select id="emb-setor" onchange="_toggleSetorCustom(\'emb\')"><option value="">Selecione...</option>'+_setorOpts(setorSel)+'</select></div>'+
+    '</div>'+
+    _setorCustomField('emb',setorSel).replace('id="emb-setor-custom"','id="emb-setor-custom" value="'+esc(p?p.setorCustom||'':'')+'\"'),
+    '<button class="btn btn-ghost" onclick="Mclose()">Cancelar</button>'+
+    '<button class="btn btn-green" onclick="saveEmb(\''+( id||'')+'\')">Salvar</button>'
+  );
+}
+function saveEmb(id){
+  const code=v('emb-code').trim(),name=v('emb-name').trim(),min=parseInt(v('emb-min'))||0;
+  const setor=v('emb-setor')||'';
+  const setorCustom=setor==='outros'?(v('emb-setor-custom')||'').trim():'';
+  if(!code||!name){toast('Código e nome obrigatórios','err');return;}
+  if(setor==='outros'&&!setorCustom){toast('Especifique o setor','err');return;}
+  const d=gdb();
+  const obj={code,name,minStock:min||undefined,tipo:'emb',setor:setor||undefined,setorCustom:setorCustom||undefined};
+  if(id){
+    const idx=d.packaging.findIndex(x=>x.id===id);
+    if(idx>=0)d.packaging[idx]={...d.packaging[idx],...obj};
+  }else{
+    if(d.packaging.some(x=>x.code.toLowerCase()===code.toLowerCase())){toast('Código já cadastrado','err');return;}
+    d.packaging.push({id:_nid(),createdAt:Date.now(),...obj});
+  }
+  sdb(d);Mclose();toast(id?'Embalagem atualizada':'Embalagem cadastrada','ok');_renderEmbTable();
+}
+function delEmb(id){
+  if(!confirm('Excluir esta embalagem?'))return;
+  const d=gdb();d.packaging=d.packaging.filter(x=>x.id!==id);
+  delete d.packagingStock[id];
+  d.packagingMovements=(d.packagingMovements||[]).filter(m=>m.itemId!==id);
+  sdb(d);toast('Excluída','ok');_renderEmbTable();
+}
+
+// ═══════════════════════════════════════════════
+// ── CADASTRO: FORNECEDORES ──────────────────────
+// ═══════════════════════════════════════════════
+function tabCadForn(){
+  const sc=el('stcontent');
+  sc.innerHTML='<div class="card"><div class="card-header"><div class="card-title">🏭 Fornecedores Cadastrados</div>'+
+    '<button class="btn btn-green btn-sm" onclick="openFornForm()">+ Novo Fornecedor</button></div>'+
+    '<div class="tw" id="forn-tbl"></div></div>';
+  _renderFornTable();
+}
+function _renderFornTable(){
+  const d=gdb(),t=el('forn-tbl');if(!t)return;
+  if(!d.suppliers.length){t.innerHTML='<div class="empty"><div class="ei">🏭</div><p>Nenhum fornecedor cadastrado</p></div>';return;}
+  t.innerHTML='<table><thead><tr><th>Nome</th><th>CNPJ</th><th></th></tr></thead><tbody>'+
+    d.suppliers.map(s=>'<tr>'+
+      '<td><strong>'+esc(s.name)+'</strong></td>'+
+      '<td><span class="sku">'+esc(s.cnpj||'—')+'</span></td>'+
+      '<td style="white-space:nowrap">'+
+        '<button class="btn btn-ghost btn-sm" onclick="openFornForm(\''+s.id+'\')">Editar</button> '+
+        (S&&_roles(S).includes('admin')?'<button class="btn btn-danger btn-sm" onclick="delForn(\''+s.id+'\')">Excluir</button>':'')+
+      '</td></tr>'
+    ).join('')+'</tbody></table>';
+}
+function openFornForm(id){
+  const d=gdb(),s=id?d.suppliers.find(x=>x.id===id):null;
+  Mopen(s?'Editar Fornecedor':'Novo Fornecedor',
+    '<div class="fg"><label>Nome *</label><input type="text" id="fn-name" value="'+esc(s?s.name:'')+'" placeholder="Razão social ou nome fantasia"></div>'+
+    '<div class="fg"><label>CNPJ</label><input type="text" id="fn-cnpj" value="'+esc(s?s.cnpj||'':'')+'" placeholder="00.000.000/0000-00" maxlength="18"></div>',
+    '<button class="btn btn-ghost" onclick="Mclose()">Cancelar</button>'+
+    '<button class="btn btn-green" onclick="saveForn(\''+( id||'')+'\')">Salvar</button>'
+  );
+}
+function saveForn(id){
+  const name=v('fn-name').trim(),cnpj=v('fn-cnpj').trim();
+  if(!name){toast('Nome obrigatório','err');return;}
+  const d=gdb();
+  if(id){
+    const idx=d.suppliers.findIndex(x=>x.id===id);
+    if(idx>=0)d.suppliers[idx]={...d.suppliers[idx],name,cnpj};
+  }else{
+    d.suppliers.push({id:_nid(),name,cnpj,createdAt:Date.now()});
+  }
+  sdb(d);Mclose();toast(id?'Fornecedor atualizado':'Fornecedor cadastrado','ok');_renderFornTable();
+}
+function delForn(id){
+  if(!confirm('Excluir este fornecedor?'))return;
+  const d=gdb();d.suppliers=d.suppliers.filter(x=>x.id!==id);
+  sdb(d);toast('Excluído','ok');_renderFornTable();
+}
+
+// ═══════════════════════════════════════════════
+// ── MOVIMENTAÇÕES: MATÉRIA PRIMA ────────────────
+// ═══════════════════════════════════════════════
+function openEntradaMP(mid){
+  const d=gdb();
+  const rmOpts=d.rawMaterials.map(m=>'<option value="'+m.id+'"'+(mid&&m.id===mid?' selected':'')+'>'+esc(m.code)+' — '+esc(m.name)+'</option>').join('');
+  const suppOpts='<option value="">Selecione...</option>'+d.suppliers.map(s=>'<option value="'+s.id+'">'+esc(s.name)+'</option>').join('');
+  Mopen('➕ Entrada de Matéria-Prima',
+    '<div class="fgrid">'+
+    '<div class="fg"><label>Produto *</label><select id="mv-item">'+rmOpts+'</select></div>'+
+    '<div class="fg"><label>Fornecedor *</label><select id="mv-supp">'+suppOpts+'</select></div>'+
+    '</div>'+
+    '<div class="fgrid">'+
+    '<div class="fg"><label>Quantidade *</label><input type="number" id="mv-qty" min="1" placeholder="0"></div>'+
+    '<div class="fg"><label>Nº da Nota Fiscal *</label><input type="text" id="mv-nf" placeholder="Ex: 000123456"></div>'+
+    '</div>'+
+    '<div class="fg"><label>Data de Entrada *</label><input type="date" id="mv-date" value="'+today8601()+'"></div>'+
+    '<div class="fg"><label>Observação</label><input type="text" id="mv-obs" placeholder="(opcional)"></div>',
+    '<button class="btn btn-ghost" onclick="Mclose()">Cancelar</button>'+
+    '<button class="btn btn-green" onclick="submitEntradaMP()">✅ Confirmar Entrada</button>'
+  );
+}
+function submitEntradaMP(){
+  const mid=v('mv-item'),sid=v('mv-supp'),qty=parseInt(v('mv-qty'))||0,nf=v('mv-nf').trim(),date=v('mv-date'),obs=v('mv-obs').trim();
+  if(!mid){toast('Selecione o produto','err');return;}
+  if(!sid){toast('Selecione o fornecedor','err');return;}
+  if(qty<=0){toast('Quantidade deve ser maior que zero','err');return;}
+  if(!nf){toast('Informe o número da nota fiscal','err');return;}
+  if(!date){toast('Informe a data','err');return;}
+  const d=gdb();
+  _updateRMStock(d,mid,sid,qty);
+  if(!d.rawMaterialMovements)d.rawMaterialMovements=[];
+  d.rawMaterialMovements.push({id:_nid(),type:'entrada',itemId:mid,supplierId:sid,qty,nfNum:nf,date,obs,createdAt:Date.now(),createdBy:S?S.name:''});
+  logAction(d,'Entrada MP',_rmName(d,mid)+' +'+fnum(qty));
+  sdb(d);Mclose();toast('Entrada registrada!','ok');
+  if(el('sup-mp-tbl'))_renderSupMPTable();
+}
+
+function openSaidaMP(mid){
+  const d=gdb();
+  const rmOpts=d.rawMaterials.map(m=>'<option value="'+m.id+'"'+(mid&&m.id===mid?' selected':'')+'>'+esc(m.code)+' — '+esc(m.name)+'</option>').join('');
+  Mopen('➖ Saída de Matéria-Prima',
+    '<div class="fg"><label>Produto *</label><select id="mv-item" onchange="_updateSuppSaida()">'+rmOpts+'</select></div>'+
+    '<div class="fg"><label>Fornecedor *</label><select id="mv-supp"><option value="">Selecione o produto primeiro...</option></select></div>'+
+    '<div class="fgrid">'+
+    '<div class="fg"><label>Quantidade *</label><input type="number" id="mv-qty" min="1" placeholder="0"></div>'+
+    '<div class="fg"><label>Nº da Requisição *</label><input type="text" id="mv-req" placeholder="Ex: REQ-001"></div>'+
+    '</div>'+
+    '<div class="fg"><label>Data de Saída *</label><input type="date" id="mv-date" value="'+today8601()+'"></div>'+
+    '<div class="fg"><label>Observação</label><input type="text" id="mv-obs" placeholder="(opcional)"></div>',
+    '<button class="btn btn-ghost" onclick="Mclose()">Cancelar</button>'+
+    '<button class="btn btn-danger" onclick="submitSaidaMP()">✅ Confirmar Saída</button>'
+  );
+  setTimeout(()=>_updateSuppSaida(mid),100);
+}
+function _updateSuppSaida(forceMid){
+  const d=gdb();const mid=forceMid||v('mv-item');if(!mid)return;
+  const st=d.rawMaterialStock[mid];
+  const suppSel=el('mv-supp');if(!suppSel)return;
+  if(!st||!Object.keys(st.bySupplier||{}).length){suppSel.innerHTML='<option value="">Sem estoque por fornecedor</option>';return;}
+  suppSel.innerHTML='<option value="">Selecione o fornecedor...</option>'+
+    Object.entries(st.bySupplier).filter(([,q])=>q>0).map(([sid,q])=>{
+      const sup=d.suppliers.find(x=>x.id===sid);
+      return'<option value="'+sid+'">'+esc(sup?sup.name:sid)+' ('+fnum(q)+' un)</option>';
+    }).join('');
+}
+function submitSaidaMP(){
+  const mid=v('mv-item'),sid=v('mv-supp'),qty=parseInt(v('mv-qty'))||0,req=v('mv-req').trim(),date=v('mv-date'),obs=v('mv-obs').trim();
+  if(!mid){toast('Selecione o produto','err');return;}
+  if(!sid){toast('Selecione o fornecedor','err');return;}
+  if(qty<=0){toast('Quantidade deve ser maior que zero','err');return;}
+  if(!req){toast('Informe o número da requisição','err');return;}
+  const d=gdb();
+  const disp=_rmStockBySupp(d,mid,sid);
+  if(qty>disp){toast('Estoque insuficiente para este fornecedor ('+fnum(disp)+' un disponíveis)','err');return;}
+  _updateRMStock(d,mid,sid,-qty);
+  if(!d.rawMaterialMovements)d.rawMaterialMovements=[];
+  d.rawMaterialMovements.push({id:_nid(),type:'saida',itemId:mid,supplierId:sid,qty,reqNum:req,date,obs,createdAt:Date.now(),createdBy:S?S.name:''});
+  logAction(d,'Saída MP',_rmName(d,mid)+' -'+fnum(qty));
+  sdb(d);Mclose();toast('Saída registrada!','ok');
+  if(el('sup-mp-tbl'))_renderSupMPTable();
+}
+
+function openInventarioMP(mid){
+  const d=gdb();
+  const m=d.rawMaterials.find(x=>x.id===mid);if(!m)return;
+  const st=d.rawMaterialStock[mid]||{total:0,bySupplier:{}};
+  const suppOpts=d.suppliers.map(s=>{
+    const qAtu=(st.bySupplier||{})[s.id]||0;
+    return'<option value="'+s.id+'">'+esc(s.name)+' (atual: '+fnum(qAtu)+' un)</option>';
+  }).join('');
+  Mopen('📋 Inventário — '+esc(m.name),
+    '<div class="alert alert-info" style="font-size:13px;margin-bottom:12px">Informe a quantidade <strong>real contada</strong>. O sistema calculará o ajuste automaticamente.</div>'+
+    '<div class="fg"><label>Fornecedor *</label><select id="mv-supp"><option value="">Selecione...</option>'+suppOpts+'</select></div>'+
+    '<div class="fgrid">'+
+    '<div class="fg"><label>Quantidade Contada *</label><input type="number" id="mv-qty" min="0" placeholder="0"></div>'+
+    '<div class="fg"><label>Data do Inventário *</label><input type="date" id="mv-date" value="'+today8601()+'"></div>'+
+    '</div>'+
+    '<div class="fg"><label>Observação</label><input type="text" id="mv-obs" placeholder="Ex: Contagem física — conferida com almoxarifado"></div>',
+    '<button class="btn btn-ghost" onclick="Mclose()">Cancelar</button>'+
+    '<button class="btn btn-green" onclick="submitInventarioMP(\''+mid+'\')">✅ Confirmar Inventário</button>'
+  );
+}
+function submitInventarioMP(mid){
+  const sid=v('mv-supp'),qty=parseInt(v('mv-qty'));
+  if(!sid){toast('Selecione o fornecedor','err');return;}
+  if(isNaN(qty)||qty<0){toast('Quantidade inválida','err');return;}
+  const d=gdb();
+  const antes=_rmStockBySupp(d,mid,sid);
+  const delta=qty-antes;
+  _setRMStock(d,mid,sid,qty);
+  if(!d.rawMaterialMovements)d.rawMaterialMovements=[];
+  d.rawMaterialMovements.push({id:_nid(),type:'inventario',itemId:mid,supplierId:sid,qty,delta,date:v('mv-date'),obs:v('mv-obs').trim(),createdAt:Date.now(),createdBy:S?S.name:''});
+  logAction(d,'Inventário MP',_rmName(d,mid)+' ajuste: '+(delta>=0?'+':'')+fnum(delta));
+  sdb(d);Mclose();toast('Inventário registrado (ajuste '+(delta>=0?'+':'')+fnum(delta)+' un)','ok');
+  if(el('sup-mp-tbl'))_renderSupMPTable();
+}
+
+// ─── MP: helper de nome ───
+function _rmName(d,mid){const m=d.rawMaterials.find(x=>x.id===mid);return m?m.name:mid;}
+
+// ═══════════════════════════════════════════════
+// ── MOVIMENTAÇÕES: EMBALAGENS ───────────────────
+// ═══════════════════════════════════════════════
+function openEntradaEmb(pid){
+  const d=gdb();
+  const opts=d.packaging.map(p=>'<option value="'+p.id+'"'+(pid&&p.id===pid?' selected':'')+'>'+esc(p.code)+' — '+esc(p.name)+'</option>').join('');
+  const suppOpts='<option value="">Selecione...</option>'+d.suppliers.map(s=>'<option value="'+s.id+'">'+esc(s.name)+'</option>').join('');
+  Mopen('➕ Entrada de Embalagem',
+    '<div class="fgrid">'+
+    '<div class="fg"><label>Embalagem *</label><select id="mv-item">'+opts+'</select></div>'+
+    '<div class="fg"><label>Fornecedor</label><select id="mv-supp">'+suppOpts+'</select></div>'+
+    '</div>'+
+    '<div class="fgrid">'+
+    '<div class="fg"><label>Quantidade *</label><input type="number" id="mv-qty" min="1" placeholder="0"></div>'+
+    '<div class="fg"><label>Nº da Nota Fiscal *</label><input type="text" id="mv-nf" placeholder="Ex: 000123456"></div>'+
+    '</div>'+
+    '<div class="fg"><label>Data de Entrada *</label><input type="date" id="mv-date" value="'+today8601()+'"></div>'+
+    '<div class="fg"><label>Observação</label><input type="text" id="mv-obs" placeholder="(opcional)"></div>',
+    '<button class="btn btn-ghost" onclick="Mclose()">Cancelar</button>'+
+    '<button class="btn btn-green" onclick="submitEntradaEmb()">✅ Confirmar Entrada</button>'
+  );
+}
+function submitEntradaEmb(){
+  const pid=v('mv-item'),sid=v('mv-supp'),qty=parseInt(v('mv-qty'))||0,nf=v('mv-nf').trim(),date=v('mv-date'),obs=v('mv-obs').trim();
+  if(!pid){toast('Selecione a embalagem','err');return;}
+  if(qty<=0){toast('Quantidade deve ser maior que zero','err');return;}
+  if(!nf){toast('Informe o número da nota fiscal','err');return;}
+  const d=gdb();
+  _updatePackStock(d,pid,qty);
+  if(!d.packagingMovements)d.packagingMovements=[];
+  d.packagingMovements.push({id:_nid(),type:'entrada',itemId:pid,supplierId:sid||null,qty,nfNum:nf,date,obs,createdAt:Date.now(),createdBy:S?S.name:''});
+  const p=d.packaging.find(x=>x.id===pid);
+  logAction(d,'Entrada Embalagem',(p?p.name:pid)+' +'+fnum(qty));
+  sdb(d);Mclose();toast('Entrada registrada!','ok');
+  if(el('sup-emb-tbl'))_renderSupEmbTable();
+}
+function openSaidaEmb(pid){
+  const d=gdb();
+  const opts=d.packaging.map(p=>{
+    const qAtu=d.packagingStock[p.id]||0;
+    return'<option value="'+p.id+'"'+(pid&&p.id===pid?' selected':'')+'>'+esc(p.code)+' — '+esc(p.name)+' ('+fnum(qAtu)+' un)</option>';
+  }).join('');
+  Mopen('➖ Saída de Embalagem',
+    '<div class="fg"><label>Embalagem *</label><select id="mv-item">'+opts+'</select></div>'+
+    '<div class="fgrid">'+
+    '<div class="fg"><label>Quantidade *</label><input type="number" id="mv-qty" min="1" placeholder="0"></div>'+
+    '<div class="fg"><label>Nº da Requisição *</label><input type="text" id="mv-req" placeholder="Ex: REQ-001"></div>'+
+    '</div>'+
+    '<div class="fg"><label>Data de Saída *</label><input type="date" id="mv-date" value="'+today8601()+'"></div>'+
+    '<div class="fg"><label>Observação</label><input type="text" id="mv-obs" placeholder="(opcional)"></div>',
+    '<button class="btn btn-ghost" onclick="Mclose()">Cancelar</button>'+
+    '<button class="btn btn-danger" onclick="submitSaidaEmb()">✅ Confirmar Saída</button>'
+  );
+}
+function submitSaidaEmb(){
+  const pid=v('mv-item'),qty=parseInt(v('mv-qty'))||0,req=v('mv-req').trim(),date=v('mv-date'),obs=v('mv-obs').trim();
+  if(!pid){toast('Selecione a embalagem','err');return;}
+  if(qty<=0){toast('Quantidade deve ser maior que zero','err');return;}
+  if(!req){toast('Informe o número da requisição','err');return;}
+  const d=gdb();
+  const disp=d.packagingStock[pid]||0;
+  if(qty>disp){toast('Estoque insuficiente ('+fnum(disp)+' un disponíveis)','err');return;}
+  _updatePackStock(d,pid,-qty);
+  if(!d.packagingMovements)d.packagingMovements=[];
+  d.packagingMovements.push({id:_nid(),type:'saida',itemId:pid,qty,reqNum:req,date,obs,createdAt:Date.now(),createdBy:S?S.name:''});
+  const p=d.packaging.find(x=>x.id===pid);
+  logAction(d,'Saída Embalagem',(p?p.name:pid)+' -'+fnum(qty));
+  sdb(d);Mclose();toast('Saída registrada!','ok');
+  if(el('sup-emb-tbl'))_renderSupEmbTable();
+}
+function openInventarioEmb(pid){
+  const d=gdb();
+  const p=d.packaging.find(x=>x.id===pid);if(!p)return;
+  const qAtu=d.packagingStock[pid]||0;
+  Mopen('📋 Inventário — '+esc(p.name),
+    '<div class="alert alert-info" style="font-size:13px;margin-bottom:12px">Quantidade atual no sistema: <strong>'+fnum(qAtu)+' un</strong>. Informe a quantidade real contada.</div>'+
+    '<div class="fgrid">'+
+    '<div class="fg"><label>Quantidade Contada *</label><input type="number" id="mv-qty" min="0" placeholder="0"></div>'+
+    '<div class="fg"><label>Data do Inventário *</label><input type="date" id="mv-date" value="'+today8601()+'"></div>'+
+    '</div>'+
+    '<div class="fg"><label>Observação</label><input type="text" id="mv-obs" placeholder="Ex: Contagem física realizada"></div>',
+    '<button class="btn btn-ghost" onclick="Mclose()">Cancelar</button>'+
+    '<button class="btn btn-green" onclick="submitInventarioEmb(\''+pid+'\')">✅ Confirmar Inventário</button>'
+  );
+}
+function submitInventarioEmb(pid){
+  const qty=parseInt(v('mv-qty'));
+  if(isNaN(qty)||qty<0){toast('Quantidade inválida','err');return;}
+  const d=gdb();
+  const antes=d.packagingStock[pid]||0;
+  const delta=qty-antes;
+  _setPackStock(d,pid,qty);
+  if(!d.packagingMovements)d.packagingMovements=[];
+  d.packagingMovements.push({id:_nid(),type:'inventario',itemId:pid,qty,delta,date:v('mv-date'),obs:v('mv-obs').trim(),createdAt:Date.now(),createdBy:S?S.name:''});
+  const p=d.packaging.find(x=>x.id===pid);
+  logAction(d,'Inventário Embalagem',(p?p.name:pid)+' ajuste: '+(delta>=0?'+':'')+fnum(delta));
+  sdb(d);Mclose();toast('Inventário registrado (ajuste '+(delta>=0?'+':'')+fnum(delta)+' un)','ok');
+  if(el('sup-emb-tbl'))_renderSupEmbTable();
+}
+
+// ═══════════════════════════════════════════════
+// ── SUPRIMENTOS: MATÉRIA PRIMA ──────────────────
+// ═══════════════════════════════════════════════
+let _supMPExpanded=null;
+function renderSupMP(){
+  const c=el('sup-c');if(!c)return;
+  const d=gdb();
+  c.innerHTML='<div class="card"><div class="card-header"><div class="card-title">🌿 Estoque de Matéria-Prima</div>'+
+    '<div style="display:flex;gap:6px">'+
+    '<button class="btn btn-green btn-sm" onclick="openEntradaMP()">➕ Entrada</button>'+
+    '<button class="btn btn-ghost btn-sm" style="color:var(--danger);border-color:rgba(239,68,68,.3)" onclick="openSaidaMP()">➖ Saída</button>'+
+    '</div></div>'+
+    '<div class="tw" id="sup-mp-tbl"></div></div>';
+  _renderSupMPTable();
+}
+function _renderSupMPTable(){
+  const t=el('sup-mp-tbl');if(!t)return;
+  const d=gdb();
+  if(!d.rawMaterials.length){t.innerHTML='<div class="empty"><div class="ei">🌿</div><p>Nenhuma matéria-prima cadastrada</p><button class="btn btn-green" onclick="stab(\'mp\')">+ Cadastrar Matéria-Prima</button></div>';return;}
+  t.innerHTML='<table><thead><tr>'+
+    '<th>Código</th><th>Matéria-Prima</th>'+
+    '<th style="text-align:center">Estoque Total</th>'+
+    '<th style="text-align:center">Estoque Mínimo</th>'+
+    '<th>Status</th><th></th>'+
+    '</tr></thead><tbody id="sup-mp-rows"></tbody></table>';
+  _renderSupMPRows(d);
+}
+function _renderSupMPRows(d){
+  const t=el('sup-mp-rows');if(!t)return;
+  t.innerHTML=d.rawMaterials.map(m=>{
+    const qty=_rmStockTotal(d,m.id);
+    const status=_rmStatus(d,m.id);
+    const badge=_stockBadge(status,qty,m.minStock);
+    const isExp=_supMPExpanded===m.id;
+    let rows='<tr style="cursor:pointer" onclick="_toggleMPDrill(\''+m.id+'\')">'+
+      '<td><span class="sku">'+esc(m.code)+'</span></td>'+
+      '<td><strong>'+esc(m.name)+'</strong></td>'+
+      '<td style="text-align:center"><strong style="font-size:15px">'+fnum(qty)+'</strong> un</td>'+
+      '<td style="text-align:center">'+(m.minStock?fnum(m.minStock)+' un':'<span style="color:var(--muted)">—</span>')+'</td>'+
+      '<td>'+badge+'</td>'+
+      '<td style="white-space:nowrap">'+
+        '<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openEntradaMP(\''+m.id+'\')">➕</button> '+
+        '<button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="event.stopPropagation();openSaidaMP(\''+m.id+'\')">➖</button> '+
+        '<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openInventarioMP(\''+m.id+'\')">📋</button>'+
+      '</td></tr>';
+    if(isExp){
+      const st=d.rawMaterialStock[m.id]||{total:0,bySupplier:{}};
+      const suppRows=d.suppliers.filter(s=>(st.bySupplier||{})[s.id]>0||false).map(s=>{
+        const q=(st.bySupplier||{})[s.id]||0;
+        return'<tr style="background:rgba(255,255,255,.03)">'+
+          '<td colspan="2" style="padding-left:32px;font-size:13px;color:var(--muted)">↳ '+esc(s.name)+'</td>'+
+          '<td style="text-align:center;font-size:13px">'+fnum(q)+' un</td>'+
+          '<td colspan="3" style="font-size:12px;color:var(--muted)">'+
+            '<a href="#" style="color:var(--info);font-size:11px" onclick="event.preventDefault();openSaidaMP(\''+m.id+'\')" >saída</a>'+
+          '</td></tr>';
+      });
+      // recent movements
+      const moves=(d.rawMaterialMovements||[]).filter(mv=>mv.itemId===m.id).slice(-5).reverse();
+      const movRows=moves.map(mv=>{
+        const sup=d.suppliers.find(x=>x.id===mv.supplierId);
+        const typeLabel=mv.type==='entrada'?'<span style="color:var(--green)">➕ Entrada</span>':mv.type==='saida'?'<span style="color:var(--danger)">➖ Saída</span>':'<span style="color:var(--info)">📋 Inventário</span>';
+        const ref=mv.nfNum?'NF: '+mv.nfNum:mv.reqNum?'REQ: '+mv.reqNum:'';
+        return'<tr style="background:rgba(255,255,255,.02);font-size:12px">'+
+          '<td colspan="2" style="padding-left:32px;color:var(--muted)">'+typeLabel+' '+fdate(mv.date)+(ref?' — '+ref:'')+(sup?' ('+esc(sup.name)+')':'')+'</td>'+
+          '<td style="text-align:center">'+(mv.type==='entrada'?'<span style="color:var(--green)">+'+fnum(mv.qty)+'</span>':mv.type==='saida'?'<span style="color:var(--danger)">-'+fnum(mv.qty)+'</span>':'<span style="color:var(--info)">'+(mv.delta>=0?'+':'')+fnum(mv.delta)+'</span>')+'</td>'+
+          '<td colspan="3" style="color:var(--muted)">'+esc(mv.obs||'')+'</td></tr>';
+      });
+      if(suppRows.length)rows+=suppRows.join('');
+      if(movRows.length)rows+='<tr><td colspan="6" style="padding:8px 16px 4px 32px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Últimas movimentações</td></tr>'+movRows.join('');
+    }
+    return rows;
+  }).join('');
+}
+function _toggleMPDrill(mid){_supMPExpanded=(_supMPExpanded===mid)?null:mid;_renderSupMPRows(gdb());}
+
+// ═══════════════════════════════════════════════
+// ── SUPRIMENTOS: EMBALAGENS ─────────────────────
+// ═══════════════════════════════════════════════
+let _supEmbExpanded=null;
+function renderSupEmb(){
+  const c=el('sup-c');if(!c)return;
+  const d=gdb();
+  c.innerHTML='<div class="card"><div class="card-header"><div class="card-title">📦 Estoque de Embalagens</div>'+
+    '<div style="display:flex;gap:6px">'+
+    '<button class="btn btn-green btn-sm" onclick="openEntradaEmb()">➕ Entrada</button>'+
+    '<button class="btn btn-ghost btn-sm" style="color:var(--danger);border-color:rgba(239,68,68,.3)" onclick="openSaidaEmb()">➖ Saída</button>'+
+    '</div></div>'+
+    '<div class="tw" id="sup-emb-tbl"></div></div>';
+  _renderSupEmbTable();
+}
+function _renderSupEmbTable(){
+  const t=el('sup-emb-tbl');if(!t)return;
+  const d=gdb();
+  if(!d.packaging.length){t.innerHTML='<div class="empty"><div class="ei">📦</div><p>Nenhuma embalagem cadastrada</p><button class="btn btn-green" onclick="stab(\'emb\')">+ Cadastrar Embalagem</button></div>';return;}
+  t.innerHTML='<table><thead><tr>'+
+    '<th>Código</th><th>Embalagem</th>'+
+    '<th style="text-align:center">Estoque</th>'+
+    '<th style="text-align:center">Estoque Mínimo</th>'+
+    '<th>Status</th><th></th>'+
+    '</tr></thead><tbody id="sup-emb-rows"></tbody></table>';
+  _renderSupEmbRows(d);
+}
+function _renderSupEmbRows(d){
+  const t=el('sup-emb-rows');if(!t)return;
+  t.innerHTML=d.packaging.map(p=>{
+    const qty=d.packagingStock[p.id]||0;
+    const status=_packStatus(d,p.id);
+    const badge=_stockBadge(status,qty,p.minStock);
+    const isExp=_supEmbExpanded===p.id;
+    let rows='<tr style="cursor:pointer" onclick="_toggleEmbDrill(\''+p.id+'\')">'+
+      '<td><span class="sku">'+esc(p.code)+'</span></td>'+
+      '<td><strong>'+esc(p.name)+'</strong></td>'+
+      '<td style="text-align:center"><strong style="font-size:15px">'+fnum(qty)+'</strong> un</td>'+
+      '<td style="text-align:center">'+(p.minStock?fnum(p.minStock)+' un':'<span style="color:var(--muted)">—</span>')+'</td>'+
+      '<td>'+badge+'</td>'+
+      '<td style="white-space:nowrap">'+
+        '<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openEntradaEmb(\''+p.id+'\')">➕</button> '+
+        '<button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="event.stopPropagation();openSaidaEmb(\''+p.id+'\')">➖</button> '+
+        '<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openInventarioEmb(\''+p.id+'\')">📋</button>'+
+      '</td></tr>';
+    if(isExp){
+      const moves=(d.packagingMovements||[]).filter(mv=>mv.itemId===p.id).slice(-5).reverse();
+      const movRows=moves.map(mv=>{
+        const typeLabel=mv.type==='entrada'?'<span style="color:var(--green)">➕ Entrada</span>':mv.type==='saida'?'<span style="color:var(--danger)">➖ Saída</span>':'<span style="color:var(--info)">📋 Inventário</span>';
+        const ref=mv.nfNum?'NF: '+mv.nfNum:mv.reqNum?'REQ: '+mv.reqNum:'';
+        return'<tr style="background:rgba(255,255,255,.02);font-size:12px">'+
+          '<td colspan="2" style="padding-left:32px;color:var(--muted)">'+typeLabel+' '+fdate(mv.date)+(ref?' — '+ref:'')+'</td>'+
+          '<td style="text-align:center">'+(mv.type==='entrada'?'<span style="color:var(--green)">+'+fnum(mv.qty)+'</span>':mv.type==='saida'?'<span style="color:var(--danger)">-'+fnum(mv.qty)+'</span>':'<span style="color:var(--info)">'+(mv.delta>=0?'+':'')+fnum(mv.delta)+'</span>')+'</td>'+
+          '<td colspan="3" style="color:var(--muted)">'+esc(mv.obs||'')+'</td></tr>';
+      });
+      if(movRows.length)rows+='<tr><td colspan="6" style="padding:8px 16px 4px 32px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Últimas movimentações</td></tr>'+movRows.join('');
+    }
+    return rows;
+  }).join('');
+}
+function _toggleEmbDrill(pid){_supEmbExpanded=(_supEmbExpanded===pid)?null:pid;_renderSupEmbRows(gdb());}
+
+// ═══════════════════════════════════════════════
+// ── DASHBOARD DO COMPRADOR ──────────────────────
+// ═══════════════════════════════════════════════
+function rCompradorDashboard(cnt){
+  const d=gdb();
+  // Calc alertas
+  const rmAlerts=d.rawMaterials.map(m=>({...m,tipo:'mp',qty:_rmStockTotal(d,m.id),status:_rmStatus(d,m.id)})).filter(x=>['zero','abaixo','proximo'].includes(x.status));
+  const embAlerts=d.packaging.map(p=>({...p,tipo:'emb',qty:d.packagingStock[p.id]||0,status:_packStatus(d,p.id)})).filter(x=>['zero','abaixo','proximo'].includes(x.status));
+  const allAlerts=[...rmAlerts,...embAlerts];
+  const qtdZero=allAlerts.filter(x=>x.status==='zero').length;
+  const qtdAbaixo=allAlerts.filter(x=>x.status==='abaixo').length;
+  const qtdProximo=allAlerts.filter(x=>x.status==='proximo').length;
+  const totalMP=d.rawMaterials.length,totalEmb=d.packaging.length;
+  // last movements
+  const lastMoves=[...(d.rawMaterialMovements||[]).map(m=>({...m,cat:'MP'})),...(d.packagingMovements||[]).map(m=>({...m,cat:'Emb'}))].sort((a,b)=>b.createdAt-a.createdAt).slice(0,8);
+  cnt.innerHTML='<div class="ptitle">🛒 Dashboard de Compras</div>'+
+  // KPI cards
+  '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:20px">'+
+    _kpiCard('🔴 Zerados',qtdZero,'itens sem estoque','var(--danger)','rgba(239,68,68,.1)')+
+    _kpiCard('⚠️ Abaixo do Mínimo',qtdAbaixo,'abaixo do mínimo','var(--warn)','rgba(245,158,11,.1)')+
+    _kpiCard('⚡ Próx. do Mínimo',qtdProximo,'chegando ao mínimo','var(--info)','rgba(99,102,241,.1)')+
+    _kpiCard('🌿 Matérias-Primas',totalMP,'cadastradas','var(--green)','rgba(34,197,94,.08)')+
+    _kpiCard('📦 Embalagens',totalEmb,'cadastradas','var(--green)','rgba(34,197,94,.08)')+
+  '</div>'+
+  // Alertas críticos
+  (allAlerts.length?
+    '<div class="card" style="margin-bottom:16px"><div class="card-header"><div class="card-title">🚨 Itens que precisam de atenção</div></div>'+
+    '<div class="tw"><table><thead><tr><th>Código</th><th>Item</th><th>Tipo</th><th style="text-align:center">Estoque Atual</th><th style="text-align:center">Mínimo</th><th>Status</th><th></th></tr></thead><tbody>'+
+    allAlerts.map(x=>{
+      const badge=_stockBadge(x.status,x.qty,x.minStock);
+      return'<tr>'+
+        '<td><span class="sku">'+esc(x.code)+'</span></td>'+
+        '<td><strong>'+esc(x.name)+'</strong></td>'+
+        '<td><span class="bs" style="font-size:11px">'+(x.tipo==='mp'?'🌿 MP':'📦 Emb')+'</span></td>'+
+        '<td style="text-align:center;font-weight:700;color:'+(x.qty===0?'var(--danger)':'var(--warn)')+'">'+fnum(x.qty)+'</td>'+
+        '<td style="text-align:center;color:var(--muted)">'+(x.minStock?fnum(x.minStock):'—')+'</td>'+
+        '<td>'+badge+'</td>'+
+        '<td><button class="btn btn-green btn-sm" onclick="'+(x.tipo==='mp'?'openEntradaMP':'openEntradaEmb')+'(\''+x.id+'\')">➕ Entrada</button></td>'+
+      '</tr>';
+    }).join('')+'</tbody></table></div></div>'
+    :'<div class="card" style="margin-bottom:16px"><div style="padding:20px;text-align:center;color:var(--green)">✅ Nenhum item crítico no momento</div></div>'
+  )+
+  // Últimas movimentações
+  (lastMoves.length?
+    '<div class="card"><div class="card-header"><div class="card-title">📋 Últimas Movimentações</div></div>'+
+    '<div class="tw"><table><thead><tr><th>Data</th><th>Tipo</th><th>Categoria</th><th>Item</th><th style="text-align:center">Qtd</th><th>Ref.</th><th>Por</th></tr></thead><tbody>'+
+    lastMoves.map(mv=>{
+      const d2=gdb();
+      const itemName=mv.cat==='MP'?_rmName(d2,mv.itemId):(d2.packaging.find(x=>x.id===mv.itemId)||{}).name||mv.itemId;
+      const typeLabel=mv.type==='entrada'?'<span style="color:var(--green)">➕ Entrada</span>':mv.type==='saida'?'<span style="color:var(--danger)">➖ Saída</span>':'<span style="color:var(--info)">📋 Inventário</span>';
+      return'<tr>'+
+        '<td style="font-size:12px">'+fdate(mv.date)+'</td>'+
+        '<td>'+typeLabel+'</td>'+
+        '<td><span class="bs" style="font-size:11px">'+(mv.cat==='MP'?'🌿 MP':'📦 Emb')+'</span></td>'+
+        '<td>'+esc(itemName)+'</td>'+
+        '<td style="text-align:center;font-weight:700">'+(mv.type==='entrada'?'<span style="color:var(--green)">+':mv.type==='saida'?'<span style="color:var(--danger)">-':'<span style="color:var(--info)">'+(mv.delta>=0?'+':''))+fnum(mv.type==='inventario'?Math.abs(mv.delta||0):mv.qty)+'</span></td>'+
+        '<td style="font-size:12px">'+esc(mv.nfNum?'NF: '+mv.nfNum:mv.reqNum?'REQ: '+mv.reqNum:'')+'</td>'+
+        '<td style="font-size:12px;color:var(--muted)">'+esc(mv.createdBy||'')+'</td>'+
+      '</tr>';
+    }).join('')+'</tbody></table></div></div>'
+    :''
+  );
+}
+function _kpiCard(label,val,sub,color,bg){
+  return'<div style="background:'+bg+';border:1px solid '+color.replace(')',', .2)').replace('var(','rgba(')+'20);border-radius:10px;padding:14px;min-width:0">'+
+    '<div style="font-size:11px;color:var(--muted);margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+label+'</div>'+
+    '<div style="font-size:26px;font-weight:800;color:'+color+';line-height:1">'+fnum(val)+'</div>'+
+    '<div style="font-size:11px;color:var(--muted);margin-top:4px">'+sub+'</div>'+
+  '</div>';
+}
+
+// ─── Alertas de estoque para comprador no login ───
+function _checkStockAlerts(){
+  if(!S)return;
+  const roles=_roles(S);
+  if(!roles.includes('comprador')&&!roles.includes('admin'))return;
+  const d=gdb();
+  const rmCrit=d.rawMaterials.filter(m=>['zero','abaixo'].includes(_rmStatus(d,m.id)));
+  const embCrit=d.packaging.filter(p=>['zero','abaixo'].includes(_packStatus(d,p.id)));
+  if(!rmCrit.length&&!embCrit.length)return;
+  const total=rmCrit.length+embCrit.length;
+  const list=[
+    ...rmCrit.map(m=>'<li>🌿 <strong>'+esc(m.name)+'</strong> ('+esc(m.code)+') — '+fnum(_rmStockTotal(d,m.id))+(m.minStock?' / mín '+fnum(m.minStock):'')+' un</li>'),
+    ...embCrit.map(p=>'<li>📦 <strong>'+esc(p.name)+'</strong> ('+esc(p.code)+') — '+fnum(d.packagingStock[p.id]||0)+(p.minStock?' / mín '+fnum(p.minStock):'')+' un</li>'),
+  ].join('');
+  Mopen('🚨 Alerta de Estoque Crítico',
+    '<div class="alert alert-warn" style="margin-bottom:12px;font-size:14px"><strong>'+total+' item(s)</strong> com estoque zerado ou abaixo do mínimo:</div>'+
+    '<ul style="font-size:13px;line-height:2;color:var(--text);padding-left:20px;margin:0">'+list+'</ul>',
+    '<button class="btn btn-ghost" onclick="Mclose()">Fechar</button>'+
+    '<button class="btn btn-green" onclick="Mclose();goTab(\'suprimentos\')">Ver Suprimentos →</button>'
+  );
 }
 </script>
 
