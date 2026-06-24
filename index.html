@@ -308,22 +308,26 @@ tbody tr:last-child td{border-bottom:none}
 .sdiv::after{content:'';flex:1;height:1px;background:var(--border)}
 
 /* ── DASHBOARD ── */
-.dash-kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:20px}
-@media(max-width:960px){.dash-kpi{grid-template-columns:repeat(2,1fr)}}
-@media(max-width:480px){.dash-kpi{grid-template-columns:1fr}}
-.kcard{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--rl);padding:14px 16px;transition:.2s}
-.kcard .kval{font-size:26px;font-weight:800;line-height:1;margin-bottom:4px;letter-spacing:-1px}
+.dash-kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px;margin-bottom:20px}
+@media(max-width:960px){.dash-kpi{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:600px){.dash-kpi{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:360px){.dash-kpi{grid-template-columns:1fr}}
+.kcard{background:var(--bg-card);border:1px solid var(--border);border-top:3px solid var(--border);border-radius:var(--rl);padding:14px 16px 12px;transition:.15s;position:relative;overflow:hidden}
+.kcard-icon{position:absolute;right:12px;top:10px;font-size:30px;opacity:.15;line-height:1;pointer-events:none;user-select:none}
+.kcard .kval{font-size:28px;font-weight:800;line-height:1;margin-bottom:5px;letter-spacing:-1.5px}
 .kcard .klabel{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
-.kcard .ksub{font-size:11px;color:var(--sub);margin-top:6px}
-.kred{border-color:#ef4444!important}.kred .kval{color:#ef4444}
-.kyellow{border-color:#eab308!important}.kyellow .kval{color:#eab308}
-.korange{border-color:#f97316!important}.korange .kval{color:#f97316}
-.kblue{border-color:#3b82f6!important}.kblue .kval{color:#3b82f6}
-.kgreen{border-color:var(--green)!important}.kgreen .kval{color:var(--green)}
+.kcard .ksub{font-size:11px;color:var(--sub);margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kred{border-top-color:#ef4444!important;background:rgba(239,68,68,.04)!important}.kred .kval{color:#ef4444}
+.kyellow{border-top-color:#eab308!important;background:rgba(234,179,8,.04)!important}.kyellow .kval{color:#eab308}
+.korange{border-top-color:#f97316!important;background:rgba(249,115,22,.04)!important}.korange .kval{color:#f97316}
+.kblue{border-top-color:#3b82f6!important;background:rgba(59,130,246,.04)!important}.kblue .kval{color:#3b82f6}
+.kgreen{border-top-color:var(--green)!important;background:rgba(34,197,94,.04)!important}.kgreen .kval{color:var(--green)}
 .kgray .kval{color:var(--sub)}
 .dash-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
 @media(max-width:860px){.dash-row{grid-template-columns:1fr}}
 .dash-panel{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--rl);padding:20px;overflow:hidden}
+.dash-panel-body{max-height:260px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+.dash-panel-body::-webkit-scrollbar{width:4px}.dash-panel-body::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
 .dpanel-title{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:14px;display:flex;align-items:center;gap:7px}
 .risk-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)}
 .risk-row:last-child{border:none;padding-bottom:0}
@@ -1196,19 +1200,21 @@ function rSectorDashboard(cnt,role){
     cnt.innerHTML='<div class="ptitle">'+secLabel[role]+'</div>'+
       '<div class="psub">Painel da Expedição — '+new Date().toLocaleString('pt-BR')+'</div>'+
       '<div class="dash-kpi">'+
-        '<div class="kcard kyellow"><div class="kval">'+prontos.length+'</div><div class="klabel">Prontos p/ Despacho</div><div class="ksub">Aguardando embarque 🚚</div></div>'+
-        '<div class="kcard '+(parciais.length?'korange':'kgreen')+'"><div class="kval">'+parciais.length+'</div><div class="klabel">Despachos Parciais</div><div class="ksub">OPs com partes despachadas</div></div>'+
-        '<div class="kcard '+(venc.length?'kred':'kgreen')+'"><div class="kval">'+venc.length+'</div><div class="klabel">OPs Vencidas</div><div class="ksub">'+(venc.length?'Requer atenção ⚠️':'Tudo em dia ✓')+'</div></div>'+
-        '<div class="kcard kgray"><div class="kval">'+activeOps.length+'</div><div class="klabel">OPs Ativas Total</div><div class="ksub">Em andamento</div></div>'+
+        '<div class="kcard kyellow"><div class="kcard-icon">🚚</div><div class="kval">'+prontos.length+'</div><div class="klabel">Prontos p/ Despacho</div><div class="ksub">Aguardando embarque</div></div>'+
+        '<div class="kcard '+(parciais.length?'korange':'kgreen')+'"><div class="kcard-icon">📦</div><div class="kval">'+parciais.length+'</div><div class="klabel">Despachos Parciais</div><div class="ksub">OPs com partes despachadas</div></div>'+
+        '<div class="kcard '+(venc.length?'kred':'kgreen')+'"><div class="kcard-icon">⏰</div><div class="kval">'+venc.length+'</div><div class="klabel">OPs Vencidas</div><div class="ksub">'+(venc.length?'Requer atenção':'Tudo em dia ✓')+'</div></div>'+
+        '<div class="kcard kblue"><div class="kcard-icon">📋</div><div class="kval">'+activeOps.length+'</div><div class="klabel">OPs Ativas</div><div class="ksub">Em andamento</div></div>'+
       '</div>'+
       '<div class="dash-panel" style="margin-bottom:16px">'+
         '<div class="dpanel-title">📦 OPs Prontas para Embarque</div>'+
+        '<div class="dash-panel-body">'+
         (!prontos.length
           ? '<div class="dash-empty">Nenhuma OP pronta para despacho no momento</div>'
           : prontos.map(op=>'<div class="risk-row"><div class="risk-dot dot-green"></div>'+
               '<div style="flex:1"><div style="font-size:13px;font-weight:600">#'+esc(op.opNum)+' · '+esc(op.clientName)+'</div>'+
               '<div style="font-size:11px;color:var(--muted)">'+(op.deliveryDate?fdate(op.deliveryDate):'Sem prazo')+' · '+op.items.length+' iten(s)</div></div>'+
               '<button class="btn btn-green btn-sm" onclick="Nav(\'expedicao\')">Despachar</button></div>').join(''))+
+        '</div>'+
       '</div>'+
       '<div style="font-size:11px;color:var(--sub);text-align:right">'+
         '<button class="btn btn-ghost btn-sm" onclick="rDashboard(el(\'acontent\'))">↻ Atualizar</button>'+
@@ -1244,14 +1250,15 @@ function rSectorDashboard(cnt,role){
     cnt.innerHTML='<div class="ptitle">'+secLabel[sec]+'</div>'+
       '<div class="psub">Painel do Setor — '+new Date().toLocaleString('pt-BR')+'</div>'+
       '<div class="dash-kpi">'+
-        '<div class="kcard kgray"><div class="kval">'+total+'</div><div class="klabel">Itens Ativos</div><div class="ksub">Neste setor</div></div>'+
-        '<div class="kcard '+(pendentes>0?'kyellow':'kgreen')+'"><div class="kval">'+pendentes+'</div><div class="klabel">Aguardando</div><div class="ksub">Não iniciados</div></div>'+
-        '<div class="kcard '+(emProd>0?'kblue':'kgray')+'"><div class="kval">'+emProd+'</div><div class="klabel">Em Produção</div><div class="ksub">Em andamento</div></div>'+
-        '<div class="kcard '+(bloq>0?'kred':'kgreen')+'"><div class="kval">'+bloq+'</div><div class="klabel">Bloqueados</div><div class="ksub">Falta material</div></div>'+
-        '<div class="kcard kgreen"><div class="kval">'+liberados+'</div><div class="klabel">Liberados</div><div class="ksub">Prontos ✓</div></div>'+
+        '<div class="kcard kblue"><div class="kcard-icon">📋</div><div class="kval">'+total+'</div><div class="klabel">Itens Ativos</div><div class="ksub">Neste setor</div></div>'+
+        '<div class="kcard '+(pendentes>0?'kyellow':'kgreen')+'"><div class="kcard-icon">⏳</div><div class="kval">'+pendentes+'</div><div class="klabel">Aguardando</div><div class="ksub">Não iniciados</div></div>'+
+        '<div class="kcard '+(emProd>0?'kblue':'kgray')+'"><div class="kcard-icon">⚙️</div><div class="kval">'+emProd+'</div><div class="klabel">Em Produção</div><div class="ksub">Em andamento</div></div>'+
+        '<div class="kcard '+(bloq>0?'kred':'kgreen')+'"><div class="kcard-icon">🔒</div><div class="kval">'+bloq+'</div><div class="klabel">Bloqueados</div><div class="ksub">Falta material</div></div>'+
+        '<div class="kcard kgreen"><div class="kcard-icon">✅</div><div class="kval">'+liberados+'</div><div class="klabel">Liberados</div><div class="ksub">Prontos ✓</div></div>'+
       '</div>'+
       '<div class="dash-panel" style="margin-bottom:16px">'+
         '<div class="dpanel-title">📋 Ordens de Produção — '+secLabel[sec]+'</div>'+
+        '<div class="dash-panel-body">'+
         (!myOps.length
           ? '<div class="dash-empty">Nenhuma OP ativa com itens deste setor</div>'
           : myOps.map(op=>{
@@ -1274,6 +1281,7 @@ function rSectorDashboard(cnt,role){
                 '<div style="text-align:right;flex-shrink:0;font-size:12px;font-weight:700;color:'+(pct===100?'var(--green)':pct>50?'#eab308':'#ef4444')+'">'+pct+'%<div style="font-size:10px;font-weight:400;color:var(--muted)">lib.</div></div>'+
               '</div>';
             }).join(''))+
+        '</div>'+
       '</div>'+
       '<div style="font-size:11px;color:var(--sub);text-align:right">'+
         '<button class="btn btn-ghost btn-sm" onclick="rDashboard(el(\'acontent\'))">↻ Atualizar</button>'+
@@ -1415,29 +1423,64 @@ function rDashboard(cnt){
       (s.blk?'<span style="color:#ef4444">■ '+fnum(s.blk)+' bloq.</span>':'')+'<span>'+
       fnum(s.total-s.lib-s.prod-s.blk)+' pend.</span></div>';
   }
-  function kCard(val,label,sub,cls){
-    return'<div class="kcard '+cls+'"><div class="kval">'+val+'</div>'+
-      '<div class="klabel">'+label+'</div><div class="ksub">'+sub+'</div></div>';
+  function kCard(val,label,sub,cls,icon){
+    return'<div class="kcard '+cls+'">'+
+      (icon?'<div class="kcard-icon">'+icon+'</div>':'')+
+      '<div class="kval">'+val+'</div>'+
+      '<div class="klabel">'+label+'</div>'+
+      '<div class="ksub">'+sub+'</div>'+
+    '</div>';
   }
+
+  // OPs finalizadas este mês
+  const mesAtual=new Date();mesAtual.setDate(1);mesAtual.setHours(0,0,0,0);
+  const finMes=d.ops.filter(o=>o.status==='finalizado'&&o.finalAt&&o.finalAt>=mesAtual.getTime()).length;
+
+  // KPI 6 – Tempo médio de ciclo (dias) — últimas 30 OPs finalizadas com createdAt
+  const cicloOps=recFin.filter(o=>o.createdAt&&o.finalAt);
+  const cicloMedio=cicloOps.length
+    ?Math.round(cicloOps.reduce((a,o)=>(a+(o.finalAt-o.createdAt)),0)/cicloOps.length/86400000)
+    :null;
+
+  // KPI 7 – Throughput semanal (OPs finalizadas 0-7d vs 7-14d atrás)
+  const ago7=Date.now()-7*86400000, ago14=Date.now()-14*86400000;
+  const fin7=d.ops.filter(o=>o.status==='finalizado'&&o.finalAt&&o.finalAt>=ago7).length;
+  const fin7prev=d.ops.filter(o=>o.status==='finalizado'&&o.finalAt&&o.finalAt>=ago14&&o.finalAt<ago7).length;
+  const throughputTrend=fin7>fin7prev?'↑':fin7<fin7prev?'↓':'→';
+  const throughputCls=fin7>fin7prev?'kgreen':fin7<fin7prev?'korange':'kblue';
+
+  // KPI 8 – OPs sem prazo definido
+  const semPrazo=activeOps.filter(o=>!o.deliveryDate).length;
 
   // Build KPI cards
   const kpis=[
     kCard(fnum(vencidos.length),'OPs Vencidas',
-      vencidos.length?'Requer atenção imediata ⚠️':'Nenhuma OP atrasada ✓',
-      vencidos.length?'kred':'kgreen'),
+      vencidos.length?'Requer atenção imediata':'Nenhuma OP atrasada ✓',
+      vencidos.length?'kred':'kgreen','⏰'),
     kCard(fnum(aVencer7.length),'Vencem em 7 dias',
       fnum(activeOps.length)+' OPs ativas no total',
-      aVencer7.length>2?'korange':aVencer7.length>0?'kyellow':'kgreen'),
+      aVencer7.length>2?'korange':aVencer7.length>0?'kyellow':'kgreen','📅'),
     kCard(fnum(bloqueados),'Itens Bloqueados',
-      'Aguardando MP / falta material',
-      bloqueados?'kred':'kgreen'),
-    kCard(effPct===null?'—':effPct+'%','Entregas no Prazo',
-      recFin.length?' Últimos 30 dias ('+fnum(recFin.length)+' OPs)':"Sem OPs finalizadas ainda",
-      effPct===null?'kgray':effPct>=85?'kgreen':effPct>=70?'kyellow':'kred'),
-    kCard(fnum(prontos.length)+(parciais.length?' ('+fnum(parciais.length)+' parciais)':''),
-      'Prontos p/ Expedição',
-      prontos.length?'Aguardando despacho 🚚':'Tudo em produção ✓',
-      prontos.length?'kyellow':'kgreen'),
+      bloqueados?'Aguardando MP / material':'Sem bloqueios no momento',
+      bloqueados?'kred':'kgreen','🔒'),
+    kCard(effPct===null?'—':effPct+'%','No Prazo (30d)',
+      recFin.length?fnum(recFin.length)+' OPs finalizadas':'Sem OPs finalizadas',
+      effPct===null?'kgray':effPct>=85?'kgreen':effPct>=70?'kyellow':'kred','🎯'),
+    kCard(fnum(prontos.length),'Prontos p/ Expedição',
+      parciais.length?fnum(parciais.length)+' despacho(s) parcial':prontos.length?'Aguardando despacho':'Tudo em produção ✓',
+      prontos.length?'kyellow':'kgreen','🚚'),
+    kCard(fnum(activeOps.length),'OPs Ativas',
+      finMes?fnum(finMes)+' finalizadas este mês':'Nenhuma finalizada este mês',
+      'kblue','📋'),
+    kCard(cicloMedio===null?'—':cicloMedio+'d','Ciclo Médio',
+      cicloOps.length?'Baseado em '+fnum(cicloOps.length)+' OPs (30d)':'Sem dados ainda',
+      cicloMedio===null?'kgray':cicloMedio<=7?'kgreen':cicloMedio<=14?'kyellow':'kred','⏱️'),
+    kCard(throughputTrend+' '+fnum(fin7),'Finalizadas (7d)',
+      fin7prev?'Semana anterior: '+fnum(fin7prev):'Primeira semana de dados',
+      throughputCls,'🏭'),
+    kCard(fnum(semPrazo),'Sem Prazo Definido',
+      semPrazo?'OPs ativas sem data de entrega':'Todas as OPs têm prazo ✓',
+      semPrazo>0?'korange':'kgreen','⚠️'),
   ].join('');
 
   // Risk list
@@ -1550,21 +1593,21 @@ function rDashboard(cnt){
     '<div class="dash-row">'+
       '<div class="dash-panel">'+
         '<div class="dpanel-title">🚨 OPs em Risco por Prazo</div>'+
-        riskHTML+
+        '<div class="dash-panel-body">'+riskHTML+'</div>'+
       '</div>'+
       '<div class="dash-panel">'+
         '<div class="dpanel-title">⚙️ Pipeline por Setor</div>'+
-        pipeHTML+
+        '<div class="dash-panel-body">'+pipeHTML+'</div>'+
       '</div>'+
     '</div>'+
     '<div class="dash-row">'+
       '<div class="dash-panel">'+
         '<div class="dpanel-title">📦 Alertas de Estoque</div>'+
-        stockHTML+
+        '<div class="dash-panel-body">'+stockHTML+'</div>'+
       '</div>'+
       '<div class="dash-panel">'+
         '<div class="dpanel-title">📊 Eficiência por Setor</div>'+
-        effHTML+
+        '<div class="dash-panel-body">'+effHTML+'</div>'+
       '</div>'+
     '</div>'+
     '<div style="font-size:11px;color:var(--sub);text-align:right;margin-top:4px">'+
