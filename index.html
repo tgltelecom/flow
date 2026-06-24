@@ -931,17 +931,24 @@ function _checkAlert(){
   const d=gdb();
   const al=(d.alerts||{})[S.id];
   if(!al||al.read)return;
+  // Bloqueia fechar pelo ✕ ou clique fora — só o botão OK libera
+  _modalLocked=true;
+  el('M').querySelector('.mclose').style.display='none';
   Mopen('📢 Alerta do Administrador',
-    '<div class="alert alert-warn" style="margin-bottom:0;font-size:15px;line-height:1.7">'+esc(al.msg)+'</div>'+
-    '<div style="font-size:12px;color:var(--muted);margin-top:10px">Enviado por '+esc(al.sentBy||'Admin')+' em '+new Date(al.sentAt).toLocaleDateString('pt-BR')+'</div>',
-    '<button class="btn btn-green" onclick="confirmAlert()">✅ Confirmar leitura</button>'
+    '<div style="font-size:15px;line-height:1.8;white-space:pre-wrap;word-break:break-word">'+esc(al.msg)+'</div>'+
+    '<div style="font-size:12px;color:var(--muted);margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">Enviado por '+esc(al.sentBy||'Admin')+' em '+new Date(al.sentAt).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})+'</div>',
+    '<button class="btn btn-green" style="min-width:120px" onclick="confirmAlert()">OK</button>'
   );
+  // Garante que o ✕ continue escondido após Mopen reescrever o modal
+  el('M').querySelector('.mclose').style.display='none';
 }
 function confirmAlert(){
   if(!S)return;
   const d=gdb();
   if(!d.alerts)d.alerts={};
   if(d.alerts[S.id])d.alerts[S.id].read=true;
+  _modalLocked=false;
+  el('M').querySelector('.mclose').style.display='';
   sdb(d);Mclose();
 }
 function openAlertForm(uid){
