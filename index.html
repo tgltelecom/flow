@@ -146,6 +146,7 @@ tbody tr:last-child td{border-bottom:none}
 .bs-finalizado{background:var(--success-bg);color:var(--success)}
 .bs-ativo{background:var(--info-bg);color:var(--info)}
 .bs-arquivado{background:rgba(100,116,139,.1);color:var(--muted)}
+.bs-cancelado{background:rgba(239,68,68,.1);color:var(--danger)}
 .bs-warn{background:rgba(245,158,11,.15);color:var(--warn);border:1px solid rgba(245,158,11,.3)}
 
 /* ── DIAS CHIP ── */
@@ -2174,7 +2175,7 @@ function tabHist(){
     sc.innerHTML='<div class="card"><div class="card-header"><div class="card-title">📋 Histórico de OPs</div>'+
       '<div class="search-wrap" style="display:flex;gap:8px;align-items:center">'+
       '<input type="text" class="sinput" id="hf-q" placeholder="🔍 Buscar pedido ou cliente..." style="width:200px;padding:6px 10px;font-size:13px" oninput="_refreshHistTable()">'+
-      '<select class="sselect" id="hf-status" onchange="_refreshHistTable()"><option value="">Todos</option><option value="ativo">Ativas</option><option value="finalizado">Finalizadas</option><option value="archived">Arquivadas</option></select>'+
+      '<select class="sselect" id="hf-status" onchange="_refreshHistTable()"><option value="">Todos</option><option value="ativo">Ativas</option><option value="finalizado">Finalizadas</option><option value="cancelado">Canceladas</option><option value="archived">Arquivadas</option></select>'+
       '</div></div><div class="tw" id="hist-tbl"></div></div>';
   }
   _refreshHistTable();
@@ -2184,9 +2185,10 @@ function _refreshHistTable(){
   const flt=(el('hf-status')||{value:''}).value;
   const q=(el('hf-q')||{value:''}).value.trim().toLowerCase();
   let ops=[...d.ops].filter(o=>{
-    if(flt==='archived'&&!o.archived)return false;
+    if(flt==='archived'&&!(o.archived&&o.status!=='cancelado'))return false;
     if(flt==='ativo'&&!(o.status==='ativo'&&!o.archived))return false;
     if(flt==='finalizado'&&!(o.status==='finalizado'&&!o.archived))return false;
+    if(flt==='cancelado'&&o.status!=='cancelado')return false;
     if(q&&!(o.opNum.toLowerCase().includes(q)||(o.clientName||'').toLowerCase().includes(q)))return false;
     return true;
   });
@@ -2222,8 +2224,8 @@ function _refreshHistTable(){
     '<th></th>'+
     '</tr></thead><tbody>'+
     ops.map(op=>{
-      const stcls=op.archived?'bs-arquivado':op.status==='finalizado'?'bs-finalizado':'bs-ativo';
-      const stlb=op.archived?'Arquivada':op.status==='finalizado'?'Finalizada':'Ativa';
+      const stcls=op.archived?(op.status==='cancelado'?'bs-cancelado':'bs-arquivado'):op.status==='finalizado'?'bs-finalizado':'bs-ativo';
+      const stlb=op.archived?(op.status==='cancelado'?'Cancelada':'Arquivada'):op.status==='finalizado'?'Finalizada':'Ativa';
       // Last liberation time across all items
       let lastLibAt=null;
       op.items.forEach(item=>{
@@ -2360,10 +2362,27 @@ function saveOPLogistica(opId){
 }
 
 function cancelOP(id){
-  if(!confirm('Cancelar esta OP?'))return;
+  const d=gdb(),op=d.ops.find(o=>o.id===id);if(!op)return;
+  Mopen('❌ Cancelar OP #'+esc(op.opNum),
+    '<div class="alert alert-warn" style="margin-bottom:12px">Tem certeza que deseja cancelar este pedido?</div>'+
+    '<div style="font-size:14px;line-height:1.7;color:var(--text)">'+
+    '<strong>Pedido:</strong> #'+esc(op.opNum)+'<br>'+
+    '<strong>Cliente:</strong> '+esc(op.clientName)+'<br>'+
+    '<strong>Itens:</strong> '+op.items.length+' item(s)'+
+    '</div>'+
+    '<div style="font-size:12px;color:var(--muted);margin-top:10px">A OP será marcada como Cancelada e ficará visível no histórico.</div>',
+    '<button class="btn btn-ghost" onclick="Mclose()">Voltar</button>'+
+    '<button class="btn btn-danger" onclick="confirmCancelOP(\''+id+'\')">❌ Confirmar Cancelamento</button>'
+  );
+}
+function confirmCancelOP(id){
   const d=gdb(),idx=d.ops.findIndex(o=>o.id===id);
-  const _copCancel=d.ops[idx];logAction(d,'OP cancelada','Pedido #'+_copCancel.opNum+' — '+_copCancel.clientName);
-  d.ops.splice(idx,1);sdb(d);toast('OP cancelada','ok');tabHist();
+  if(idx<0)return;
+  const op=d.ops[idx];
+  logAction(d,'OP cancelada','Pedido #'+op.opNum+' — '+op.clientName);
+  d.ops[idx]={...op,status:'cancelado',archived:true,canceledAt:Date.now(),canceledBy:S?S.name:''};
+  sdb(d);Mclose();toast('OP #'+op.opNum+' cancelada','ok');
+  setTimeout(()=>_refreshHistTable(),100);
 }
 
 function openManualOP(){
