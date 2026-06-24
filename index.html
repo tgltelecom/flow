@@ -453,7 +453,6 @@ tbody tr:last-child td{border-bottom:none}
 </head>
 <body>
 
-
 <!-- ═══ LOGIN ═══ -->
 <div id="login-screen">
   <div class="lcard">
@@ -542,6 +541,8 @@ if(typeof pdfjsLib!=='undefined') pdfjsLib.GlobalWorkerOptions.workerSrc='https:
 // ─── DB / SUPABASE ───
 const SUPA_URL='https://bobzfvyqqxapvoabtejl.supabase.co';
 const SUPA_KEY='sb_publishable_yyFwUYtK5D24yeAsd6jkjQ_UuizdNAA';
+const _AUDIT_KEY='tgl_v3_audit'; // linha separada no banco para o log de auditoria
+let _auditLog=[];                     // mantido em memória; nunca entra no payload principal
 const APP_VERSION='1.3.0';
 const APP_CHANGELOG={
   '1.3.0':[
@@ -584,7 +585,7 @@ const APP_CHANGELOG={
   ],
   '1.0.0':[
     'Sistema renomeado para Flow',
-    'Ambiente de testes isolado (tgl_v3)',
+    'Dados de produção (tgl_v3)',
     'Correção de salvamento simultâneo com múltiplos usuários',
     'Ordenação por colunas em Expedição, Produção e Histórico',
     'Filtro por tipo de logística na Expedição',
@@ -606,13 +607,45 @@ async function loadDB(){
     const rows=await r.json();
     if(rows&&rows.length>0){_db={...idb(),...rows[0].data};}
     else{_db=idb();await _sf('/rest/v1/app_data',{method:'POST',headers:{Prefer:'resolution=merge-duplicates'},body:JSON.stringify({key:'tgl_v3',data:_db,updated_at:new Date().toISOString()})});}
+    _loadAuditLog(); // não bloqueia — carrega audit em paralelo
     setSyncBadge(true);
   }catch(e){
     console.error('[TGL]',e);
-    try{const bk=localStorage.getItem('tgl_bk');if(bk)_db=JSON.parse(bk);}catch{}
+    try{const bk=localStorage.getItem('tgl_bk_prod');if(bk)_db=JSON.parse(bk);}catch{}
     if(!_db)_db=idb();
     setSyncBadge(false);
   }
+}
+
+// ── AUDIT LOG SEPARADO ──────────────────────────────────────────────────────
+// O auditLog vive em uma linha própria (key=_AUDIT_KEY) para não inflar o
+// payload principal do merge_app_data. _auditLog é carregado uma vez no boot
+// e salvo de forma independente a cada logAction.
+async function _loadAuditLog(){
+  try{
+    const r=await _sf('/rest/v1/app_data?key=eq.'+_AUDIT_KEY+'&select=data');
+    if(!r.ok)return;
+    const rows=await r.json();
+    if(rows&&rows.length>0){
+      _auditLog=rows[0].data.entries||[];
+    }else{
+      // Migração única: se o payload principal ainda tem entradas antigas, migra
+      const legacy=(_db&&_db.auditLog)||[];
+      if(legacy.length>0){
+        _auditLog=legacy;
+        _saveAuditLog(); // persiste na nova linha
+      }
+    }
+  }catch(e){console.warn('[TGL] audit load failed:',e);}
+}
+async function _saveAuditLog(){
+  try{
+    await _sf('/rest/v1/app_data',{
+      method:'POST',
+      headers:{Prefer:'resolution=merge-duplicates'},
+      body:JSON.stringify({key:_AUDIT_KEY,data:{entries:_auditLog},updated_at:new Date().toISOString()})
+    });
+  }catch(e){console.warn('[TGL] audit save failed:',e);}
 }
 
 let _saveInProgress=false;
@@ -627,7 +660,8 @@ async function saveDBRemote(d){
   _saveInProgress=true;
   setSyncBadge(null); // "saving..."
   while(_saveQueue){
-    const payload=_saveQueue;
+    // auditLog é gerenciado separadamente — nunca entra no merge principal
+    const {auditLog:_al,...payload}=_saveQueue;
     _saveQueue=null;
     let attempt=0,success=false;
     while(attempt<3&&!success){
@@ -646,7 +680,7 @@ async function saveDBRemote(d){
           // If _saveQueue has a newer payload, _db already reflects local changes
           // made after this RPC was sent — overwriting would lose those changes.
           if(_saveQueue===null) _db=merged;
-          try{localStorage.setItem('tgl_bk',JSON.stringify(merged));}catch{}
+          try{localStorage.setItem('tgl_bk_prod',JSON.stringify(merged));}catch{}
         }
         _failedPayload=null; // clear any previous failure on success
         _lastSaveAt=Date.now(); // record time of last successful save
@@ -686,7 +720,7 @@ function _retrySave(){
   _failedPayload=null;
   el('save-err-bar').remove();
   // Merge failed payload into _db so local state is preserved before retry
-  if(p&&p!==_db){_db=p;try{localStorage.setItem('tgl_bk',JSON.stringify(p));}catch{}}
+  if(p&&p!==_db){_db=p;try{localStorage.setItem('tgl_bk_prod',JSON.stringify(p));}catch{}}
   saveDBRemote(p);
 }
 
@@ -759,16 +793,16 @@ function setSyncBadge(ok){
 }
 
 function gdb(){return _db||idb();}
-function sdb(d){_db=d;try{localStorage.setItem('tgl_bk',JSON.stringify(d));}catch{}saveDBRemote(d);}
+function sdb(d){_db=d;try{localStorage.setItem('tgl_bk_prod',JSON.stringify(d));}catch{}saveDBRemote(d);}
 function idb(){return{users:[{id:'u1',name:'Administrador',email:'admin@tgltelecom.com.br',password:'admin123',role:'admin',firstAccess:false,pending:false}],clients:[],products:[],ops:[],stock:{},seq:1000,presence:{},auditLog:[],alerts:{},forceLogout:{},rawMaterials:[],packaging:[],suppliers:[],rawMaterialStock:{},packagingStock:{},rawMaterialMovements:[],packagingMovements:[],purchaseOrders:[]};}
 function uid(){return '_'+Math.random().toString(36).substr(2,9);}
 function logAction(d,action,details){
   if(!S)return;
-  if(!d.auditLog)d.auditLog=[];
-  d.auditLog.unshift({id:uid(),at:Date.now(),uid:S.id,uname:S.name,action,details:details||''});
-  // Manter apenas os últimos 180 dias de log
+  // Grava em _auditLog (linha separada) — d não é modificado, payload principal não infla
+  _auditLog.unshift({id:uid(),at:Date.now(),uid:S.id,uname:S.name,action,details:details||''});
   const cutoff=Date.now()-180*24*60*60*1000;
-  d.auditLog=d.auditLog.filter(e=>e.at>=cutoff);
+  _auditLog=_auditLog.filter(e=>e.at>=cutoff);
+  _saveAuditLog(); // fire-and-forget
 }
 
 async function hashPw(pw){
@@ -3372,19 +3406,18 @@ function admTab(t){
   }
 }
 function tabAudit(){
-  const d=gdb();
   el('adm-c').innerHTML='<div class="card"><div class="card-header"><div class="card-title">📋 Log de Auditoria</div>'+
     '<div style="display:flex;gap:8px;align-items:center">'+
     '<input class="sinput" id="audit-q" placeholder="Filtrar..." oninput="renderAuditTable()" style="width:200px">'+
-    '<button class="btn btn-ghost btn-sm" onclick="renderAuditTable()">↻</button>'+
+    '<button class="btn btn-ghost btn-sm" onclick="_loadAuditLog().then(renderAuditTable)">↻</button>'+
     '</div></div>'+
     '<div id="audit-tbl"></div></div>';
-  renderAuditTable();
+  // Recarrega do servidor para garantir que outro usuário que logou aparece
+  _loadAuditLog().then(()=>renderAuditTable());
 }
 function renderAuditTable(){
-  const d=gdb();
   const q=(v('audit-q')||'').toLowerCase();
-  const log=(d.auditLog||[]).filter(e=>!q||
+  const log=(_auditLog||[]).filter(e=>!q||
     (e.uname&&e.uname.toLowerCase().includes(q))||
     (e.action&&e.action.toLowerCase().includes(q))||
     (e.details&&e.details.toLowerCase().includes(q))
@@ -3577,7 +3610,7 @@ function closeGSearch(){
         // timestamps to detect this and restore the correct local state.
         const ndSnap=JSON.stringify(nd);
         _mergeItemStatuses(_db,nd);
-        _db=nd;try{localStorage.setItem('tgl_bk',JSON.stringify(nd));}catch{}
+        _db=nd;try{localStorage.setItem('tgl_bk_prod',JSON.stringify(nd));}catch{}
         // Auto-refresh the current view — skip if a modal is open (avoids disrupting forms)
         if(!el('M').classList.contains('open'))refreshCurrentTab();
         // If we re-applied local fixes, push the corrected data back to the server so
