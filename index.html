@@ -690,12 +690,16 @@ async function saveDBRemote(d){
           // may have overwritten (happens when another user saved the same OP with
           // stale item data — the merge gives OP-level priority, not item-level).
           _mergeItemStatuses(payload,merged);
+          _mergeOpStatuses(payload,merged);
           _checkConflicts(payload,merged);
           // Only replace _db if no newer save is queued.
           // If _saveQueue has a newer payload, _db already reflects local changes
           // made after this RPC was sent — overwriting would lose those changes.
           if(_saveQueue===null) _db=merged;
           try{localStorage.setItem('tgl_bk',JSON.stringify(merged));}catch{}
+          // Verifica alerta novo que pode ter chegado via resposta do merge
+          // (ex: heartbeat de presença recebia o alerta mas nunca chamava _checkAlert)
+          if(S&&!el('M').classList.contains('open'))_checkAlert();
         }
         _failedPayload=null; // clear any previous failure on success
         _lastSaveAt=Date.now(); // record time of last successful save
@@ -760,6 +764,22 @@ function _mergeItemStatuses(sent,merged){
         mOp.items[idx]={...mItem,...sItem}; // local fields win for this item
       }
     });
+  });
+}
+
+// Protege status terminal de OP (finalizado/cancelado) de ser revertido por saves
+// concorrentes de outros usuários. Se o local tem finalAt mais recente, mantém.
+function _mergeOpStatuses(local,merged){
+  const TERMINAL=['finalizado','cancelado'];
+  if(!local.ops||!merged.ops)return;
+  local.ops.forEach(lOp=>{
+    if(!TERMINAL.includes(lOp.status))return;
+    const mOp=merged.ops.find(o=>o.id===lOp.id);
+    if(!mOp)return;
+    // Se o servidor não tem status terminal (ou o local é mais recente), restaura
+    if(!TERMINAL.includes(mOp.status)||(lOp.finalAt&&(!mOp.finalAt||lOp.finalAt>=mOp.finalAt))){
+      Object.assign(mOp,lOp);
+    }
   });
 }
 
@@ -3717,15 +3737,16 @@ function closeGSearch(){
         // timestamps to detect this and restore the correct local state.
         const ndSnap=JSON.stringify(nd);
         _mergeItemStatuses(_db,nd);
+        _mergeOpStatuses(_db,nd);
         _db=nd;try{localStorage.setItem('tgl_bk',JSON.stringify(nd));}catch{}
         // Auto-refresh the current view — skip if a modal is open (avoids disrupting forms)
         if(!el('M').classList.contains('open'))refreshCurrentTab();
         // If we re-applied local fixes, push the corrected data back to the server so
         // future syncs don't revert them again.
         if(JSON.stringify(nd)!==ndSnap) saveDBRemote(nd);
-        // Check for new unread alert
-        if(!el('M').classList.contains('open'))_checkAlert();
       }
+      // Verifica alerta sempre que chegam dados do servidor (independente de diff)
+      if(S&&!el('M').classList.contains('open'))_checkAlert();
       setSyncBadge(true);
     }catch{setSyncBadge(false);}
   }
