@@ -169,6 +169,13 @@ tbody tr:last-child td{border-bottom:none}
 .sem-g .sem-dot{background:var(--success)}
 .sem-r .sem-dot{background:var(--danger)}
 .sem-y .sem-dot{background:var(--warn)}
+#op-tip{position:fixed;z-index:9999;display:none;background:var(--bg-card2);border:1px solid var(--border2);border-radius:var(--r);box-shadow:var(--sh);padding:8px 0;min-width:260px;max-width:340px;pointer-events:none}
+#op-tip .opt-row{display:flex;align-items:center;gap:0;padding:5px 12px;font-size:12px;border-bottom:1px solid var(--border)}
+#op-tip .opt-row:last-child{border-bottom:none}
+#op-tip .opt-op{font-weight:700;color:var(--accent);flex-shrink:0;min-width:52px}
+#op-tip .opt-cl{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 8px;color:var(--text)}
+#op-tip .opt-qty{flex-shrink:0;font-weight:600;color:var(--warn);white-space:nowrap}
+#op-tip .opt-hd{padding:4px 12px 6px;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border);margin-bottom:2px}
 
 /* ── EXPAND BTN ── */
 .xbtn{background:var(--bg-card2);border:1px solid var(--border);color:var(--muted);
@@ -455,7 +462,8 @@ tbody tr:last-child td{border-bottom:none}
 }
 </style>
 </head>
-<body>
+<body onmousemove="moveOpTip(event)">
+
 
 <!-- ═══ LOGIN ═══ -->
 <div id="login-screen">
@@ -527,6 +535,9 @@ tbody tr:last-child td{border-bottom:none}
   </div>
 </div>
 
+<!-- ═══ OP TOOLTIP ═══ -->
+<div id="op-tip"></div>
+
 <!-- ═══ MODAL ═══ -->
 <div class="mo" id="M" onclick="mclickout(event)">
   <div class="mbox" id="Mbox">
@@ -589,7 +600,7 @@ const APP_CHANGELOG={
   ],
   '1.0.0':[
     'Sistema renomeado para Flow',
-    'Dados de produção (tgl_v3)',
+    'Ambiente de testes isolado (tgl_v3)',
     'Correção de salvamento simultâneo com múltiplos usuários',
     'Ordenação por colunas em Expedição, Produção e Histórico',
     'Filtro por tipo de logística na Expedição',
@@ -615,7 +626,7 @@ async function loadDB(){
     setSyncBadge(true);
   }catch(e){
     console.error('[TGL]',e);
-    try{const bk=localStorage.getItem('tgl_bk_prod');if(bk)_db=JSON.parse(bk);}catch{}
+    try{const bk=localStorage.getItem('tgl_bk');if(bk)_db=JSON.parse(bk);}catch{}
     if(!_db)_db=idb();
     setSyncBadge(false);
   }
@@ -684,7 +695,7 @@ async function saveDBRemote(d){
           // If _saveQueue has a newer payload, _db already reflects local changes
           // made after this RPC was sent — overwriting would lose those changes.
           if(_saveQueue===null) _db=merged;
-          try{localStorage.setItem('tgl_bk_prod',JSON.stringify(merged));}catch{}
+          try{localStorage.setItem('tgl_bk',JSON.stringify(merged));}catch{}
         }
         _failedPayload=null; // clear any previous failure on success
         _lastSaveAt=Date.now(); // record time of last successful save
@@ -724,7 +735,7 @@ function _retrySave(){
   _failedPayload=null;
   el('save-err-bar').remove();
   // Merge failed payload into _db so local state is preserved before retry
-  if(p&&p!==_db){_db=p;try{localStorage.setItem('tgl_bk_prod',JSON.stringify(p));}catch{}}
+  if(p&&p!==_db){_db=p;try{localStorage.setItem('tgl_bk',JSON.stringify(p));}catch{}}
   saveDBRemote(p);
 }
 
@@ -797,7 +808,7 @@ function setSyncBadge(ok){
 }
 
 function gdb(){return _db||idb();}
-function sdb(d){_db=d;try{localStorage.setItem('tgl_bk_prod',JSON.stringify(d));}catch{}saveDBRemote(d);}
+function sdb(d){_db=d;try{localStorage.setItem('tgl_bk',JSON.stringify(d));}catch{}saveDBRemote(d);}
 function idb(){return{users:[{id:'u1',name:'Administrador',email:'admin@tgltelecom.com.br',password:'admin123',role:'admin',firstAccess:false,pending:false}],clients:[],products:[],ops:[],stock:{},seq:1000,presence:{},auditLog:[],alerts:{},forceLogout:{},rawMaterials:[],packaging:[],suppliers:[],rawMaterialStock:{},packagingStock:{},rawMaterialMovements:[],packagingMovements:[],purchaseOrders:[]};}
 function uid(){return '_'+Math.random().toString(36).substr(2,9);}
 function logAction(d,action,details){
@@ -2662,10 +2673,40 @@ function sstab(t){
   else if(t==='mp')renderSupMP();
   else if(t==='emb')renderSupEmb();
 }
+let _opTipData={};
+function showOpTip(evt,pid){
+  const tip=el('op-tip');
+  const rows=(_opTipData[pid]||[]);
+  if(!rows.length){tip.style.display='none';return;}
+  tip.innerHTML='<div class="opt-hd">OPs reservando este produto</div>'+
+    rows.map(r=>{const cl=r.client.length>15?r.client.slice(0,15)+'…':r.client;return'<div class="opt-row"><span class="opt-op">#'+esc(String(r.num))+'</span><span class="opt-cl" title="'+esc(r.client)+'">'+esc(cl)+'</span><span class="opt-qty">'+fnum(r.qty)+' un.</span></div>';}).join('');
+  tip.style.display='block';
+  const x=evt.clientX,y=evt.clientY,tw=tip.offsetWidth||280,th=tip.offsetHeight||100;
+  const vw=window.innerWidth,vh=window.innerHeight;
+  tip.style.left=(x+16+tw>vw?x-tw-8:x+16)+'px';
+  tip.style.top=(y+16+th>vh?y-th-8:y+16)+'px';
+}
+function moveOpTip(evt){
+  const tip=el('op-tip');
+  if(tip.style.display==='none')return;
+  const tw=tip.offsetWidth||280,th=tip.offsetHeight||100;
+  const vw=window.innerWidth,vh=window.innerHeight;
+  const x=evt.clientX,y=evt.clientY;
+  tip.style.left=(x+16+tw>vw?x-tw-8:x+16)+'px';
+  tip.style.top=(y+16+th>vh?y-th-8:y+16)+'px';
+}
+function hideOpTip(){el('op-tip').style.display='none';}
 function renderEstoque(){
   const d=gdb(),el2=el('sup-c');
   const demands={};
-  d.ops.filter(o=>o.status==='ativo'&&!o.archived).forEach(op=>op.items.forEach(i=>{demands[i.pid]=(demands[i.pid]||0)+i.qty;}));
+  _opTipData={};
+  d.ops.filter(o=>o.status==='ativo'&&!o.archived).forEach(op=>{
+    op.items.forEach(i=>{
+      demands[i.pid]=(demands[i.pid]||0)+i.qty;
+      if(!_opTipData[i.pid])_opTipData[i.pid]=[];
+      _opTipData[i.pid].push({num:op.opNum||op.id,client:(op.clientName||'—'),qty:i.qty});
+    });
+  });
   const qSaved=(el('srch-est')?el('srch-est').value:'');
   const fBtnCls=(f)=>'btn btn-sm '+(_supFilter===f?'btn-outline':'btn-ghost');
   el2.innerHTML='<div class="card"><div class="card-header"><div class="card-title">Controle de Estoque</div>'+
@@ -2727,7 +2768,7 @@ function renderEstoque(){
       return'<tr><td><strong>'+esc(p.name)+'</strong></td>'+
         '<td><span class="sku">'+esc(p.sku||'—')+'</span></td>'+
         '<td style="text-align:center">'+(qty!==null?'<strong style="font-size:16px">'+fnum(qty)+'</strong>':'<span style="color:var(--muted)">—</span>')+'</td>'+
-        '<td style="text-align:center">'+(dem>0?'<span style="background:rgba(245,158,11,.15);color:var(--warn);border:1px solid rgba(245,158,11,.25);border-radius:4px;padding:2px 8px;font-size:13px;font-weight:600">🔒 '+fnum(dem)+'</span>':'<span style="color:var(--muted);font-size:12px">—</span>')+'</td>'+
+        '<td style="text-align:center">'+(dem>0?'<span onmouseenter="showOpTip(event,\''+p.id+'\')" onmouseleave="hideOpTip()" style="background:rgba(245,158,11,.15);color:var(--warn);border:1px solid rgba(245,158,11,.25);border-radius:4px;padding:2px 8px;font-size:13px;font-weight:600;cursor:default">🔒 '+fnum(dem)+'</span>':'<span style="color:var(--muted);font-size:12px">—</span>')+'</td>'+
         '<td style="text-align:center">'+(avail===null?'—':avail>=0?'<span style="color:var(--green);font-weight:700;font-size:16px">+'+fnum(avail)+'</span>':'<span style="color:var(--danger);font-weight:700;font-size:14px">⚠️ Falta '+fnum(Math.abs(avail))+'</span>')+'</td>'+
         '<td><span class="'+cls+'"><span class="sem-dot"></span>'+label+'</span></td>'+
         '<td style="white-space:nowrap"><button class="btn btn-ghost btn-sm" onclick="openLancamento(\x27'+p.id+'\x27)">Lançar</button> <button class="btn btn-ghost btn-sm" onclick="openInventario(\x27'+p.id+'\x27)">Inventário</button></td></tr>';
@@ -3676,7 +3717,7 @@ function closeGSearch(){
         // timestamps to detect this and restore the correct local state.
         const ndSnap=JSON.stringify(nd);
         _mergeItemStatuses(_db,nd);
-        _db=nd;try{localStorage.setItem('tgl_bk_prod',JSON.stringify(nd));}catch{}
+        _db=nd;try{localStorage.setItem('tgl_bk',JSON.stringify(nd));}catch{}
         // Auto-refresh the current view — skip if a modal is open (avoids disrupting forms)
         if(!el('M').classList.contains('open'))refreshCurrentTab();
         // If we re-applied local fixes, push the corrected data back to the server so
@@ -3695,7 +3736,7 @@ function closeGSearch(){
   // Using REST re-fetch instead of payload data to avoid REPLICA IDENTITY requirements.
   try{
     const _supa=window.supabase.createClient(SUPA_URL,SUPA_KEY);
-    _supa.channel('tgl_rt')
+    _supa.channel('tgl_rt_dev')
       .on('postgres_changes',{event:'UPDATE',schema:'public',table:'app_data',filter:'key=eq.tgl_v3'},
         ()=>{ if(S)_syncFromServer(); }
       )
