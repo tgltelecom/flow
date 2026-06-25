@@ -610,18 +610,69 @@ const APP_CHANGELOG={
   ]
 };
 let _db=null;
+// ── OPS TABLE ────────────────────────────────────────────────────────────────
+// Cada OP vive em sua própria linha → sem race condition de blob compartilhado.
+// O script de produção substitui 'tgl_ops' por 'tgl_ops' automaticamente.
+const _OPS_TABLE='tgl_ops';
+let _lastSavedOpsStr={}; // {opId: JSON.stringify(op)} — detecção de mudanças
 
 async function _sf(path,opts={}){
   return fetch(SUPA_URL+path,{...opts,headers:{apikey:SUPA_KEY,Authorization:'Bearer '+SUPA_KEY,'Content-Type':'application/json',...(opts.headers||{})}});
 }
 
+async function _loadOps(){
+  // Carrega todas as OPs da tabela dedicada
+  const r=await _sf('/rest/v1/'+_OPS_TABLE+'?select=id,data&order=updated_at.asc');
+  if(!r.ok)return null;
+  const rows=await r.json();
+  // Inicializa mapa de detecção de mudanças
+  _lastSavedOpsStr={};
+  rows.forEach(row=>{_lastSavedOpsStr[row.id]=JSON.stringify(row.data);});
+  return rows.map(row=>row.data);
+}
+async function _saveOpsToTable(ops){
+  // Upsert apenas OPs que mudaram desde o último save
+  const changed=(ops||[]).filter(op=>JSON.stringify(op)!==_lastSavedOpsStr[op.id]);
+  if(!changed.length)return;
+  const rows=changed.map(op=>({id:op.id,data:op,status:op.status||'pendente',updated_at:new Date().toISOString()}));
+  const r=await _sf('/rest/v1/'+_OPS_TABLE,{
+    method:'POST',
+    headers:{Prefer:'resolution=merge-duplicates'},
+    body:JSON.stringify(rows)
+  });
+  if(!r.ok)throw new Error('[TGL] ops upsert HTTP '+r.status);
+  // Atualiza mapa de detecção após save bem-sucedido
+  changed.forEach(op=>{_lastSavedOpsStr[op.id]=JSON.stringify(op);});
+  console.log('[TGL] '+changed.length+' OP(s) salvas na tabela dedicada');
+}
 async function loadDB(){
   try{
-    const r=await _sf('/rest/v1/app_data?key=eq.tgl_v3&select=data');
-    if(!r.ok)throw new Error('HTTP '+r.status);
-    const rows=await r.json();
-    if(rows&&rows.length>0){_db={...idb(),...rows[0].data};}
-    else{_db=idb();await _sf('/rest/v1/app_data',{method:'POST',headers:{Prefer:'resolution=merge-duplicates'},body:JSON.stringify({key:'tgl_v3',data:_db,updated_at:new Date().toISOString()})});}
+    // Carrega blob principal e OPs em paralelo
+    const [blobRes,opsLoaded]=await Promise.all([
+      _sf('/rest/v1/app_data?key=eq.tgl_v3&select=data'),
+      _loadOps().catch(e=>{console.warn('[TGL] ops load:',e);return null;})
+    ]);
+    if(!blobRes.ok)throw new Error('HTTP '+blobRes.status);
+    const rows=await blobRes.json();
+    if(rows&&rows.length>0){
+      _db={...idb(),...rows[0].data};
+    }else{
+      _db=idb();
+      const {ops:_o,auditLog:_a,...blobOnly}=_db;
+      await _sf('/rest/v1/app_data',{method:'POST',headers:{Prefer:'resolution=merge-duplicates'},
+        body:JSON.stringify({key:'tgl_v3',data:{...blobOnly,ops:[]},updated_at:new Date().toISOString()})});
+    }
+    if(opsLoaded!==null&&opsLoaded.length>0){
+      // Tabela de OPs tem dados — usa ela
+      _db.ops=opsLoaded;
+    }else if(_db.ops&&_db.ops.length>0){
+      // Migração automática: ops ainda estão no blob → move para tabela dedicada
+      console.log('[TGL] Migrando '+_db.ops.length+' OPs para tabela dedicada…');
+      await _saveOpsToTable(_db.ops);
+      console.log('[TGL] Migração concluída.');
+    }else{
+      _db.ops=_db.ops||[];
+    }
     _loadAuditLog(); // não bloqueia — carrega audit em paralelo
     setSyncBadge(true);
   }catch(e){
@@ -673,37 +724,34 @@ async function saveDBRemote(d){
   _saveQueue=d;
   if(_saveInProgress)return;
   _saveInProgress=true;
-  setSyncBadge(null); // "saving..."
+  setSyncBadge(null);
   while(_saveQueue){
-    // auditLog é gerenciado separadamente — nunca entra no merge principal
-    const {auditLog:_al,...payload}=_saveQueue;
+    // Separa: auditLog e ops saem do blob principal
+    const {auditLog:_al,ops:_opsArr,...blobPayload}=_saveQueue;
+    const opsToSave=_opsArr||[];
     _saveQueue=null;
     let attempt=0,success=false;
     while(attempt<3&&!success){
       attempt++;
       try{
-        const r=await _sf('/rest/v1/rpc/merge_app_data',{method:'POST',body:JSON.stringify({p_key:'tgl_v3',p_local:payload})});
-        if(!r.ok)throw new Error('HTTP '+r.status);
-        const merged=await r.json();
+        // Salva blob principal (sem ops) e OPs em paralelo
+        const [blobRes]=await Promise.all([
+          _sf('/rest/v1/rpc/merge_app_data',{method:'POST',
+            body:JSON.stringify({p_key:'tgl_v3',p_local:{...blobPayload,ops:[]}})}),
+          _saveOpsToTable(opsToSave).catch(e=>console.warn('[TGL] ops save warn:',e))
+        ]);
+        if(!blobRes.ok)throw new Error('HTTP '+blobRes.status);
+        const merged=await blobRes.json();
         if(merged&&typeof merged==='object'){
-          // Re-apply any item-level status changes from our payload that the server
-          // may have overwritten (happens when another user saved the same OP with
-          // stale item data — the merge gives OP-level priority, not item-level).
-          _mergeItemStatuses(payload,merged);
-          _mergeOpStatuses(payload,merged);
-          _checkConflicts(payload,merged);
-          // Only replace _db if no newer save is queued.
-          // If _saveQueue has a newer payload, _db already reflects local changes
-          // made after this RPC was sent — overwriting would lose those changes.
-          if(_saveQueue===null) _db=merged;
+          // Reinsere ops locais no merged (ops não vêm mais do blob do servidor)
+          merged.ops=_db.ops;
+          _checkConflicts(blobPayload,merged);
+          if(_saveQueue===null)_db=merged;
           try{localStorage.setItem('tgl_bk',JSON.stringify(merged));}catch{}
-          // Verifica alerta novo que pode ter chegado via resposta do merge
-          // (ex: heartbeat de presença recebia o alerta mas nunca chamava _checkAlert)
           if(S&&!el('M').classList.contains('open'))_checkAlert();
         }
-        _failedPayload=null; // clear any previous failure on success
-        _lastSaveAt=Date.now(); // record time of last successful save
-        // Auto-dismiss error bar if a later queued save succeeded
+        _failedPayload=null;
+        _lastSaveAt=Date.now();
         const _eb=el('save-err-bar');if(_eb)_eb.remove();
         success=true;
       }catch(e){
@@ -712,9 +760,7 @@ async function saveDBRemote(d){
       }
     }
     if(!success){
-      // Preserve the failed payload so the retry button sends exactly this data,
-      // even if _db gets updated (e.g. by background sync) before the user retries.
-      _failedPayload=payload;
+      _failedPayload=blobPayload;
       setSyncBadge(false);
       _showSaveError();
     }else{
@@ -735,12 +781,10 @@ function _showSaveError(){
   bar.innerHTML='⚠️ Falha ao salvar. <button class="btn btn-sm" style="background:#991b1b;color:#fca5a5;border:1px solid #b91c1c;padding:4px 10px" onclick="_retrySave()">Tentar novamente</button>';
 }
 function _retrySave(){
-  const p=_failedPayload||_db;
   _failedPayload=null;
   el('save-err-bar').remove();
-  // Merge failed payload into _db so local state is preserved before retry
-  if(p&&p!==_db){_db=p;try{localStorage.setItem('tgl_bk',JSON.stringify(p));}catch{}}
-  saveDBRemote(p);
+  // Usa _db diretamente — contém estado correto incluindo ops
+  saveDBRemote(_db);
 }
 
 // Re-apply item-level status changes that the server-side OP merge may have lost.
@@ -764,22 +808,6 @@ function _mergeItemStatuses(sent,merged){
         mOp.items[idx]={...mItem,...sItem}; // local fields win for this item
       }
     });
-  });
-}
-
-// Protege status terminal de OP (finalizado/cancelado) de ser revertido por saves
-// concorrentes de outros usuários. Se o local tem finalAt mais recente, mantém.
-function _mergeOpStatuses(local,merged){
-  const TERMINAL=['finalizado','cancelado'];
-  if(!local.ops||!merged.ops)return;
-  local.ops.forEach(lOp=>{
-    if(!TERMINAL.includes(lOp.status))return;
-    const mOp=merged.ops.find(o=>o.id===lOp.id);
-    if(!mOp)return;
-    // Se o servidor não tem status terminal (ou o local é mais recente), restaura
-    if(!TERMINAL.includes(mOp.status)||(lOp.finalAt&&(!mOp.finalAt||lOp.finalAt>=mOp.finalAt))){
-      Object.assign(mOp,lOp);
-    }
   });
 }
 
@@ -3716,36 +3744,39 @@ function closeGSearch(){
   // Called by both the Realtime subscription and the fallback polling interval.
   async function _syncFromServer(){
     try{
-      const r=await _sf('/rest/v1/app_data?key=eq.tgl_v3&select=data');
-      if(!r.ok)return;
-      const rows=await r.json();
+      // Busca blob principal e OPs em paralelo
+      const [blobRes,opsRes]=await Promise.all([
+        _sf('/rest/v1/app_data?key=eq.tgl_v3&select=data'),
+        _sf('/rest/v1/'+_OPS_TABLE+'?select=id,data')
+      ]);
+      if(!blobRes.ok)return;
+      const rows=await blobRes.json();
       if(!rows||!rows.length)return;
-      const nd={...idb(),...rows[0].data};
-      // Guards:
-      // 1. Skip if a local save is in flight / queued / failed (would revert local changes)
-      // 2. Skip within 15s of a successful save (grace period for server propagation)
+      // Monta estado do servidor: blob + ops da tabela dedicada
+      const serverOpsRows=opsRes.ok?(await opsRes.json()):[];
+      // Merge inteligente de ops: ops com mudanças locais não salvas são preservadas
+      const serverOpsById=Object.fromEntries(serverOpsRows.map(r=>[r.id,r.data]));
+      const mergedOps=(_db.ops||[]).map(localOp=>{
+        const serverOp=serverOpsById[localOp.id];
+        if(!serverOp)return localOp; // OP ainda não chegou ao servidor
+        // Se local tem mudanças não salvas nesta OP, mantém local
+        if(_lastSavedOpsStr[localOp.id]&&JSON.stringify(localOp)!==_lastSavedOpsStr[localOp.id])return localOp;
+        // Caso contrário, usa versão do servidor (pode ter mudanças de outro usuário)
+        const ndOp={...serverOp};
+        _mergeItemStatuses({ops:[localOp]},{ops:[ndOp]}); // protege statusAt de itens
+        return ndOp;
+      });
+      // Adiciona OPs que existem no servidor mas ainda não estão no local (criadas por outro usuário)
+      serverOpsRows.forEach(r=>{if(!mergedOps.find(o=>o.id===r.id))mergedOps.push(r.data);});
+      const nd={...idb(),...rows[0].data,ops:mergedOps};
       const _gracePassed=(Date.now()-_lastSaveAt)>15000;
-      // Check force logout before applying any data changes
       _checkForceLogout(nd);
-      if(!S)return; // was force-logged out
-      if(!_saveInProgress && _saveQueue===null && !_failedPayload && _gracePassed
-         && JSON.stringify(nd)!==JSON.stringify(_db)){
-        // Re-apply any local item status changes that are newer than what the server
-        // returned. This happens when another user's concurrent save overwrote our
-        // item status changes on the server (merge gives priority to the second saver's
-        // full OP, reverting our status update). _mergeItemStatuses uses statusAt
-        // timestamps to detect this and restore the correct local state.
-        const ndSnap=JSON.stringify(nd);
-        _mergeItemStatuses(_db,nd);
-        _mergeOpStatuses(_db,nd);
+      if(!S)return;
+      if(!_saveInProgress&&_saveQueue===null&&!_failedPayload&&_gracePassed
+         &&JSON.stringify(nd)!==JSON.stringify(_db)){
         _db=nd;try{localStorage.setItem('tgl_bk',JSON.stringify(nd));}catch{}
-        // Auto-refresh the current view — skip if a modal is open (avoids disrupting forms)
         if(!el('M').classList.contains('open'))refreshCurrentTab();
-        // If we re-applied local fixes, push the corrected data back to the server so
-        // future syncs don't revert them again.
-        if(JSON.stringify(nd)!==ndSnap) saveDBRemote(nd);
       }
-      // Verifica alerta sempre que chegam dados do servidor (independente de diff)
       if(S&&!el('M').classList.contains('open'))_checkAlert();
       setSyncBadge(true);
     }catch{setSyncBadge(false);}
@@ -3758,7 +3789,15 @@ function closeGSearch(){
   try{
     const _supa=window.supabase.createClient(SUPA_URL,SUPA_KEY);
     _supa.channel('tgl_rt_dev')
+      // Mudanças no blob principal (usuários, produtos, estoque, alertas…)
       .on('postgres_changes',{event:'UPDATE',schema:'public',table:'app_data',filter:'key=eq.tgl_v3'},
+        ()=>{ if(S)_syncFromServer(); }
+      )
+      // Mudanças em qualquer OP — INSERT ou UPDATE (criação ou alteração por outro usuário)
+      .on('postgres_changes',{event:'INSERT',schema:'public',table:'tgl_ops'},
+        ()=>{ if(S)_syncFromServer(); }
+      )
+      .on('postgres_changes',{event:'UPDATE',schema:'public',table:'tgl_ops'},
         ()=>{ if(S)_syncFromServer(); }
       )
       .subscribe(status=>{
