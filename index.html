@@ -616,6 +616,12 @@ let _db=null;
 const _OPS_TABLE='tgl_ops';
 let _lastSavedOpsStr={}; // {opId: JSON.stringify(op)} — detecção de mudanças
 
+const _STOCK_TABLE='tgl_stock';
+let _lastSavedStockStr={}; // {prefixedId: JSON.stringify(data)} — P:pid, RM:mid, PK:pid
+
+const _MOV_TABLE='tgl_movements';
+let _lastSavedMovIds=new Set(); // IDs de movimentos já persistidos no servidor
+
 async function _sf(path,opts={}){
   return fetch(SUPA_URL+path,{...opts,headers:{apikey:SUPA_KEY,Authorization:'Bearer '+SUPA_KEY,'Content-Type':'application/json',...(opts.headers||{})}});
 }
@@ -645,12 +651,101 @@ async function _saveOpsToTable(ops){
   changed.forEach(op=>{_lastSavedOpsStr[op.id]=JSON.stringify(op);});
   console.log('[TGL] '+changed.length+' OP(s) salvas na tabela dedicada');
 }
+// ── STOCK TABLE ─────────────────────────────────────────────────────────────
+async function _loadStock(){
+  const r=await _sf('/rest/v1/'+_STOCK_TABLE+'?select=id,data');
+  if(!r.ok)return null;
+  const rows=await r.json();
+  _lastSavedStockStr={};
+  rows.forEach(row=>{_lastSavedStockStr[row.id]=JSON.stringify(row.data);});
+  const stock={},rmStock={},pkStock={};
+  rows.forEach(({id,data})=>{
+    if(id.startsWith('P:'))stock[id.slice(2)]=data;
+    else if(id.startsWith('RM:'))rmStock[id.slice(3)]=data;
+    else if(id.startsWith('PK:')){pkStock[id.slice(3)]=data&&typeof data==='object'&&'qty' in data?data.qty:data;}
+  });
+  return {stock,rawMaterialStock:rmStock,packagingStock:pkStock};
+}
+async function _saveStockToTable(d){
+  const rows=[];
+  const currentKeys=new Set();
+  Object.entries(d.stock||{}).forEach(([pid,val])=>{
+    const id='P:'+pid;currentKeys.add(id);
+    if(JSON.stringify(val)!==_lastSavedStockStr[id])rows.push({id,data:val,updated_at:new Date().toISOString()});
+  });
+  Object.entries(d.rawMaterialStock||{}).forEach(([mid,val])=>{
+    const id='RM:'+mid;currentKeys.add(id);
+    if(JSON.stringify(val)!==_lastSavedStockStr[id])rows.push({id,data:val,updated_at:new Date().toISOString()});
+  });
+  Object.entries(d.packagingStock||{}).forEach(([pid,val])=>{
+    const id='PK:'+pid;currentKeys.add(id);
+    const data={qty:val};
+    if(JSON.stringify(data)!==_lastSavedStockStr[id])rows.push({id,data,updated_at:new Date().toISOString()});
+  });
+  const toDelete=Object.keys(_lastSavedStockStr).filter(id=>!currentKeys.has(id));
+  const ps=[];
+  if(rows.length){
+    ps.push(_sf('/rest/v1/'+_STOCK_TABLE,{
+      method:'POST',headers:{Prefer:'resolution=merge-duplicates'},body:JSON.stringify(rows)
+    }).then(r=>{
+      if(!r.ok)throw new Error('[TGL] stock upsert HTTP '+r.status);
+      rows.forEach(row=>{_lastSavedStockStr[row.id]=JSON.stringify(row.data);});
+    }));
+  }
+  if(toDelete.length){
+    const idsParam=toDelete.map(id=>'"'+id.replace(/"/g,'\\"')+'"').join(',');
+    ps.push(_sf('/rest/v1/'+_STOCK_TABLE+'?id=in.('+idsParam+')',{method:'DELETE'})
+      .then(r=>{if(r.ok)toDelete.forEach(id=>delete _lastSavedStockStr[id]);}));
+  }
+  if(ps.length)await Promise.all(ps);
+}
+
+// ── MOVEMENTS TABLE ──────────────────────────────────────────────────────────
+async function _loadMovements(){
+  const r=await _sf('/rest/v1/'+_MOV_TABLE+'?select=id,data,category&order=updated_at.asc');
+  if(!r.ok)return null;
+  const rows=await r.json();
+  _lastSavedMovIds=new Set(rows.map(r=>r.id));
+  return {
+    rawMaterialMovements:rows.filter(r=>r.category==='raw').map(r=>r.data),
+    packagingMovements:rows.filter(r=>r.category==='pack').map(r=>r.data)
+  };
+}
+async function _saveMovementsToTable(d){
+  const allCurrentIds=new Set([
+    ...(d.rawMaterialMovements||[]).map(m=>m.id),
+    ...(d.packagingMovements||[]).map(m=>m.id)
+  ]);
+  const toInsert=[
+    ...(d.rawMaterialMovements||[]).filter(m=>!_lastSavedMovIds.has(m.id)).map(m=>({id:m.id,data:m,category:'raw',updated_at:new Date().toISOString()})),
+    ...(d.packagingMovements||[]).filter(m=>!_lastSavedMovIds.has(m.id)).map(m=>({id:m.id,data:m,category:'pack',updated_at:new Date().toISOString()}))
+  ];
+  const toDelete=[..._lastSavedMovIds].filter(id=>!allCurrentIds.has(id));
+  const ps=[];
+  if(toInsert.length){
+    ps.push(_sf('/rest/v1/'+_MOV_TABLE,{
+      method:'POST',headers:{Prefer:'resolution=merge-duplicates'},body:JSON.stringify(toInsert)
+    }).then(r=>{
+      if(!r.ok)throw new Error('[TGL] movements insert HTTP '+r.status);
+      toInsert.forEach(row=>_lastSavedMovIds.add(row.id));
+    }));
+  }
+  if(toDelete.length){
+    const idsParam=toDelete.map(id=>'"'+id.replace(/"/g,'\\"')+'"').join(',');
+    ps.push(_sf('/rest/v1/'+_MOV_TABLE+'?id=in.('+idsParam+')',{method:'DELETE'})
+      .then(r=>{if(r.ok)toDelete.forEach(id=>_lastSavedMovIds.delete(id));}));
+  }
+  if(ps.length)await Promise.all(ps);
+}
+
 async function loadDB(){
   try{
-    // Carrega blob principal e OPs em paralelo
-    const [blobRes,opsLoaded]=await Promise.all([
+    // Carrega blob principal, OPs, estoque e movimentos em paralelo
+    const [blobRes,opsLoaded,stockLoaded,movsLoaded]=await Promise.all([
       _sf('/rest/v1/app_data?key=eq.tgl_v3&select=data'),
-      _loadOps().catch(e=>{console.warn('[TGL] ops load:',e);return null;})
+      _loadOps().catch(e=>{console.warn('[TGL] ops load:',e);return null;}),
+      _loadStock().catch(e=>{console.warn('[TGL] stock load:',e);return null;}),
+      _loadMovements().catch(e=>{console.warn('[TGL] movements load:',e);return null;})
     ]);
     if(!blobRes.ok)throw new Error('HTTP '+blobRes.status);
     const rows=await blobRes.json();
@@ -660,18 +755,44 @@ async function loadDB(){
       _db=idb();
       const {ops:_o,auditLog:_a,...blobOnly}=_db;
       await _sf('/rest/v1/app_data',{method:'POST',headers:{Prefer:'resolution=merge-duplicates'},
-        body:JSON.stringify({key:'tgl_v3',data:{...blobOnly,ops:[]},updated_at:new Date().toISOString()})});
+        body:JSON.stringify({key:'tgl_v3',data:{...blobOnly,ops:[],stock:{},rawMaterialStock:{},packagingStock:{},rawMaterialMovements:[],packagingMovements:[]},updated_at:new Date().toISOString()})});
     }
+    // OPs
     if(opsLoaded!==null&&opsLoaded.length>0){
-      // Tabela de OPs tem dados — usa ela
       _db.ops=opsLoaded;
     }else if(_db.ops&&_db.ops.length>0){
-      // Migração automática: ops ainda estão no blob → move para tabela dedicada
       console.log('[TGL] Migrando '+_db.ops.length+' OPs para tabela dedicada…');
       await _saveOpsToTable(_db.ops);
-      console.log('[TGL] Migração concluída.');
+      console.log('[TGL] Migração OPs concluída.');
     }else{
       _db.ops=_db.ops||[];
+    }
+    // Estoque
+    const _stockHasData=stockLoaded&&(Object.keys(stockLoaded.stock).length||Object.keys(stockLoaded.rawMaterialStock).length||Object.keys(stockLoaded.packagingStock).length);
+    if(_stockHasData){
+      _db.stock=stockLoaded.stock;
+      _db.rawMaterialStock=stockLoaded.rawMaterialStock;
+      _db.packagingStock=stockLoaded.packagingStock;
+    }else if(stockLoaded!==null){
+      const _hasBlob=Object.keys(_db.stock||{}).length||Object.keys(_db.rawMaterialStock||{}).length||Object.keys(_db.packagingStock||{}).length;
+      if(_hasBlob){
+        console.log('[TGL] Migrando estoque para tabela dedicada…');
+        await _saveStockToTable(_db);
+        console.log('[TGL] Migração estoque concluída.');
+      }
+    }
+    // Movimentos
+    const _movsHasData=movsLoaded&&((movsLoaded.rawMaterialMovements||[]).length||(movsLoaded.packagingMovements||[]).length);
+    if(_movsHasData){
+      _db.rawMaterialMovements=movsLoaded.rawMaterialMovements;
+      _db.packagingMovements=movsLoaded.packagingMovements;
+    }else if(movsLoaded!==null){
+      const _hasMovBlob=(_db.rawMaterialMovements||[]).length||(_db.packagingMovements||[]).length;
+      if(_hasMovBlob){
+        console.log('[TGL] Migrando movimentos para tabela dedicada…');
+        await _saveMovementsToTable(_db);
+        console.log('[TGL] Migração movimentos concluída.');
+      }
     }
     _loadAuditLog(); // não bloqueia — carrega audit em paralelo
     setSyncBadge(true);
@@ -726,25 +847,32 @@ async function saveDBRemote(d){
   _saveInProgress=true;
   setSyncBadge(null);
   while(_saveQueue){
-    // Separa: auditLog e ops saem do blob principal
-    const {auditLog:_al,ops:_opsArr,...blobPayload}=_saveQueue;
+    // Separa: auditLog, ops, estoque e movimentos saem do blob principal
+    const {auditLog:_al,ops:_opsArr,stock:_stk,rawMaterialStock:_rmStk,packagingStock:_pkStk,rawMaterialMovements:_rmMovs,packagingMovements:_pkMovs,...blobPayload}=_saveQueue;
     const opsToSave=_opsArr||[];
     _saveQueue=null;
     let attempt=0,success=false;
     while(attempt<3&&!success){
       attempt++;
       try{
-        // Salva blob principal (sem ops) e OPs em paralelo
+        // Salva blob principal (sem ops/estoque/movimentos) e tabelas em paralelo
         const [blobRes]=await Promise.all([
           _sf('/rest/v1/rpc/merge_app_data',{method:'POST',
-            body:JSON.stringify({p_key:'tgl_v3',p_local:{...blobPayload,ops:[]}})}),
-          _saveOpsToTable(opsToSave).catch(e=>console.warn('[TGL] ops save warn:',e))
+            body:JSON.stringify({p_key:'tgl_v3',p_local:{...blobPayload,ops:[],stock:{},rawMaterialStock:{},packagingStock:{},rawMaterialMovements:[],packagingMovements:[]}})}),
+          _saveOpsToTable(opsToSave).catch(e=>console.warn('[TGL] ops save warn:',e)),
+          _saveStockToTable({stock:_stk||{},rawMaterialStock:_rmStk||{},packagingStock:_pkStk||{}}).catch(e=>console.warn('[TGL] stock save warn:',e)),
+          _saveMovementsToTable({rawMaterialMovements:_rmMovs||[],packagingMovements:_pkMovs||[]}).catch(e=>console.warn('[TGL] movements save warn:',e))
         ]);
         if(!blobRes.ok)throw new Error('HTTP '+blobRes.status);
         const merged=await blobRes.json();
         if(merged&&typeof merged==='object'){
-          // Reinsere ops locais no merged (ops não vêm mais do blob do servidor)
+          // Reinsere entidades de tabelas dedicadas no merged
           merged.ops=_db.ops;
+          merged.stock=_db.stock;
+          merged.rawMaterialStock=_db.rawMaterialStock;
+          merged.packagingStock=_db.packagingStock;
+          merged.rawMaterialMovements=_db.rawMaterialMovements;
+          merged.packagingMovements=_db.packagingMovements;
           _checkConflicts(blobPayload,merged);
           if(_saveQueue===null)_db=merged;
           try{localStorage.setItem('tgl_bk',JSON.stringify(merged));}catch{}
@@ -3744,31 +3872,71 @@ function closeGSearch(){
   // Called by both the Realtime subscription and the fallback polling interval.
   async function _syncFromServer(){
     try{
-      // Busca blob principal e OPs em paralelo
-      const [blobRes,opsRes]=await Promise.all([
+      // Busca blob principal, OPs, estoque e movimentos em paralelo
+      const [blobRes,opsRes,stockRes,movsRes]=await Promise.all([
         _sf('/rest/v1/app_data?key=eq.tgl_v3&select=data'),
-        _sf('/rest/v1/'+_OPS_TABLE+'?select=id,data')
+        _sf('/rest/v1/'+_OPS_TABLE+'?select=id,data'),
+        _sf('/rest/v1/'+_STOCK_TABLE+'?select=id,data'),
+        _sf('/rest/v1/'+_MOV_TABLE+'?select=id,data,category')
       ]);
       if(!blobRes.ok)return;
       const rows=await blobRes.json();
       if(!rows||!rows.length)return;
-      // Monta estado do servidor: blob + ops da tabela dedicada
+
+      // ── Merge OPs ────────────────────────────────────────────────────────────
       const serverOpsRows=opsRes.ok?(await opsRes.json()):[];
-      // Merge inteligente de ops: ops com mudanças locais não salvas são preservadas
       const serverOpsById=Object.fromEntries(serverOpsRows.map(r=>[r.id,r.data]));
       const mergedOps=(_db.ops||[]).map(localOp=>{
         const serverOp=serverOpsById[localOp.id];
-        if(!serverOp)return localOp; // OP ainda não chegou ao servidor
-        // Se local tem mudanças não salvas nesta OP, mantém local
+        if(!serverOp)return localOp;
         if(_lastSavedOpsStr[localOp.id]&&JSON.stringify(localOp)!==_lastSavedOpsStr[localOp.id])return localOp;
-        // Caso contrário, usa versão do servidor (pode ter mudanças de outro usuário)
         const ndOp={...serverOp};
-        _mergeItemStatuses({ops:[localOp]},{ops:[ndOp]}); // protege statusAt de itens
+        _mergeItemStatuses({ops:[localOp]},{ops:[ndOp]});
         return ndOp;
       });
-      // Adiciona OPs que existem no servidor mas ainda não estão no local (criadas por outro usuário)
       serverOpsRows.forEach(r=>{if(!mergedOps.find(o=>o.id===r.id))mergedOps.push(r.data);});
-      const nd={...idb(),...rows[0].data,ops:mergedOps};
+
+      // ── Merge Estoque ─────────────────────────────────────────────────────────
+      let mergedStock=_db.stock||{},mergedRmStock=_db.rawMaterialStock||{},mergedPkStock=_db.packagingStock||{};
+      if(stockRes.ok){
+        const stockRows=await stockRes.json();
+        const ns={},nrm={},npk={};
+        stockRows.forEach(({id,data})=>{
+          if(id.startsWith('P:')){
+            const pid=id.slice(2);
+            const localVal=(_db.stock||{})[pid];
+            ns[pid]=(_lastSavedStockStr[id]&&JSON.stringify(localVal)!==_lastSavedStockStr[id])?localVal:data;
+            _lastSavedStockStr[id]=JSON.stringify(data);
+          }else if(id.startsWith('RM:')){
+            const mid=id.slice(3);
+            const localVal=(_db.rawMaterialStock||{})[mid];
+            nrm[mid]=(_lastSavedStockStr[id]&&JSON.stringify(localVal)!==_lastSavedStockStr[id])?localVal:data;
+            _lastSavedStockStr[id]=JSON.stringify(data);
+          }else if(id.startsWith('PK:')){
+            const pid=id.slice(3);
+            const localVal=(_db.packagingStock||{})[pid];
+            const dqty=data&&typeof data==='object'&&'qty' in data?data.qty:data;
+            npk[pid]=(_lastSavedStockStr[id]&&JSON.stringify({qty:localVal})!==_lastSavedStockStr[id])?localVal:dqty;
+            _lastSavedStockStr[id]=JSON.stringify({qty:dqty});
+          }
+        });
+        mergedStock=ns;mergedRmStock=nrm;mergedPkStock=npk;
+      }
+
+      // ── Merge Movimentos ──────────────────────────────────────────────────────
+      let mergedRmMovs=_db.rawMaterialMovements||[],mergedPkMovs=_db.packagingMovements||[];
+      if(movsRes.ok){
+        const movsRows=await movsRes.json();
+        const serverMovIds=new Set(movsRows.map(r=>r.id));
+        // Movimentos locais ainda não salvos (novos)
+        const newLocalRM=(_db.rawMaterialMovements||[]).filter(m=>!_lastSavedMovIds.has(m.id));
+        const newLocalPK=(_db.packagingMovements||[]).filter(m=>!_lastSavedMovIds.has(m.id));
+        mergedRmMovs=[...movsRows.filter(r=>r.category==='raw').map(r=>r.data),...newLocalRM.filter(m=>!serverMovIds.has(m.id))];
+        mergedPkMovs=[...movsRows.filter(r=>r.category==='pack').map(r=>r.data),...newLocalPK.filter(m=>!serverMovIds.has(m.id))];
+        _lastSavedMovIds=serverMovIds;
+      }
+
+      const nd={...idb(),...rows[0].data,ops:mergedOps,stock:mergedStock,rawMaterialStock:mergedRmStock,packagingStock:mergedPkStock,rawMaterialMovements:mergedRmMovs,packagingMovements:mergedPkMovs};
       const _gracePassed=(Date.now()-_lastSaveAt)>15000;
       _checkForceLogout(nd);
       if(!S)return;
@@ -3798,6 +3966,14 @@ function closeGSearch(){
         ()=>{ if(S)_syncFromServer(); }
       )
       .on('postgres_changes',{event:'UPDATE',schema:'public',table:'tgl_ops'},
+        ()=>{ if(S)_syncFromServer(); }
+      )
+      // Mudanças de estoque
+      .on('postgres_changes',{event:'*',schema:'public',table:'tgl_stock'},
+        ()=>{ if(S)_syncFromServer(); }
+      )
+      // Novos movimentos
+      .on('postgres_changes',{event:'INSERT',schema:'public',table:'tgl_movements'},
         ()=>{ if(S)_syncFromServer(); }
       )
       .subscribe(status=>{
