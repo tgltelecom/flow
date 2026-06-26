@@ -558,8 +558,14 @@ const SUPA_URL='https://bobzfvyqqxapvoabtejl.supabase.co';
 const SUPA_KEY='sb_publishable_yyFwUYtK5D24yeAsd6jkjQ_UuizdNAA';
 const _AUDIT_KEY='tgl_v3_audit'; // linha separada no banco para o log de auditoria
 let _auditLog=[];                     // mantido em memória; nunca entra no payload principal
-const APP_VERSION='1.3.0';
+const APP_VERSION='1.3.1';
 const APP_CHANGELOG={
+  '1.3.1':[
+    'Unidade de medida (UN/KG/CJ) em Produtos, Matérias-Primas e Embalagens',
+    'Suporte a 4 casas decimais para itens em KG em todo o sistema',
+    'Sincronização simultânea silenciosa — sem interrupção por conflitos de edição',
+    'Banco de dados: cada módulo agora tem tabela dedicada (produtos, clientes, MP, embalagens, fornecedores, usuários)',
+  ],
   '1.3.0':[
     'Novo perfil: Comprador — dashboard de compras, alertas de estoque crítico',
     'Cadastro de Matéria Prima e Embalagens (código, nome, estoque mínimo)',
@@ -4008,26 +4014,7 @@ function closeGSearch(){
         return ndOp;
       });
       serverOpsRows.forEach(r=>{if(!mergedOps.find(o=>o.id===r.id))mergedOps.push(r.data);});
-      // Detecção de conflito: local E servidor mudaram a mesma OP independentemente
-      if(!_saveInProgress&&_saveQueue===null){
-        const _cfls=[];
-        (_db.ops||[]).forEach(localOp=>{
-          const srvOp=serverOpsById[localOp.id];
-          const last=_lastSavedOpsStr[localOp.id];
-          if(!srvOp||!last)return;
-          if(JSON.stringify(localOp)!==last&&JSON.stringify(srvOp)!==last)
-            _cfls.push('#'+(localOp.opNum||localOp.id)+' ('+esc(localOp.clientName||'')+')');
-        });
-        if(_cfls.length){setTimeout(()=>{
-          Mopen('⚠️ Alteração Simultânea Detectada',
-            '<div style="text-align:center;padding:8px 0"><div style="font-size:32px;margin-bottom:12px">⚠️</div>'+
-            '<p style="font-size:14px;line-height:1.6;margin-bottom:8px">Outro usuário alterou os mesmos registros enquanto você trabalhava:</p>'+
-            '<p style="font-weight:700;color:var(--warn);margin:8px 0">'+_cfls.join('<br>')+'</p>'+
-            '<p style="font-size:13px;color:var(--muted);margin-top:8px">As alterações foram mescladas. A tela foi atualizada com o estado mais recente.</p></div>',
-            '<button class="btn btn-green" style="min-width:120px" onclick="Mclose();refreshCurrentTab()">Ok · Ver atualizado</button>'
-          );
-        },600);}
-      }
+      // Conflitos são mesclados silenciosamente — sem modal interruptivo
 
       // ── Merge Estoque ─────────────────────────────────────────────────────────
       let mergedStock=_db.stock||{},mergedRmStock=_db.rawMaterialStock||{},mergedPkStock=_db.packagingStock||{};
