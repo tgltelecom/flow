@@ -147,6 +147,7 @@ tbody tr:last-child td{border-bottom:none}
 .bs-ativo{background:var(--info-bg);color:var(--info)}
 .bs-arquivado{background:rgba(100,116,139,.1);color:var(--muted)}
 .bs-iniciada{background:rgba(34,197,94,.12);color:#4ade80;border:1px solid rgba(34,197,94,.3)}
+.bs-galv{background:rgba(168,85,247,.12);color:#c084fc;border:1px solid rgba(168,85,247,.25)}
 .bs-cancelado{background:rgba(239,68,68,.1);color:var(--danger)}
 .bs-tipo-mp{background:rgba(34,197,94,.12);color:#4ade80;border:1px solid rgba(34,197,94,.25)}
 .bs-tipo-emb{background:rgba(59,130,246,.12);color:#60a5fa;border:1px solid rgba(59,130,246,.25)}
@@ -271,7 +272,7 @@ tbody tr:last-child td{border-bottom:none}
 /* ── SECTOR BADGES ── */
 .sb{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;margin:2px}
 .sb-pref{background:var(--purple-bg);color:var(--purple)}
-.sb-estm{background:var(--info-bg);color:var(--info)}
+.sb-estm{background:var(--warn-bg);color:var(--warn)}
 .sb-espi{background:var(--orange-bg);color:var(--orange)}
 .sb-stok{background:var(--success-bg);color:var(--success)}
 
@@ -558,8 +559,14 @@ const SUPA_URL='https://bobzfvyqqxapvoabtejl.supabase.co';
 const SUPA_KEY='sb_publishable_yyFwUYtK5D24yeAsd6jkjQ_UuizdNAA';
 const _AUDIT_KEY='tgl_v3_audit'; // linha separada no banco para o log de auditoria
 let _auditLog=[];                     // mantido em memória; nunca entra no payload principal
-const APP_VERSION='1.3.1';
+const APP_VERSION='1.3.2';
 const APP_CHANGELOG={
+  '1.3.2':[
+    'Correção crítica: dados não somem mais ao navegar entre cadastros',
+    'Unidades MT (metro) e RL (rolo) disponíveis em todos os cadastros',
+    'Estamparia: cor do setor alterada para amarelo',
+    'Status "Em galvanização externo" exclusivo para itens de estamparia',
+  ],
   '1.3.1':[
     'Unidade de medida (UN/KG/CJ) em Produtos, Matérias-Primas e Embalagens',
     'Suporte a 4 casas decimais para itens em KG em todo o sistema',
@@ -1429,17 +1436,17 @@ function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').
 function fdate(d){if(!d)return'—';const p=d.split('-');return p.length===3?p[2]+'/'+p[1]+'/'+p[0]:d;}
 function fnum(n){const v=parseInt(n)||0;return v.toLocaleString('pt-BR');}
 function fqty(n,unit){
-  if((unit||'UN')==='KG'){
+  if(['KG','MT'].includes(unit||'UN')){
     const v=parseFloat(n)||0;
     return v.toLocaleString('pt-BR',{minimumFractionDigits:0,maximumFractionDigits:4});
   }
   return fnum(n);
 }
-function _parseQty(val,unit){return(unit||'UN')==='KG'?(parseFloat(val)||0):(parseInt(val)||0);}
+function _parseQty(val,unit){return['KG','MT'].includes(unit||'UN')?(parseFloat(val)||0):(parseInt(val)||0);}
 function _unitSel(id,val,def){
   const u=val||def||'UN';
   return '<div class="fg"><label>Unidade</label><select id="'+id+'">'+
-    ['UN','KG','CJ'].map(o=>'<option value="'+o+'"'+(o===u?' selected':'')+'>'+o+'</option>').join('')+
+    ['UN','KG','CJ','MT','RL'].map(o=>'<option value="'+o+'"'+(o===u?' selected':'')+'>'+o+'</option>').join('')+
     '</select></div>';
 }
 function today8601(){return new Date().toISOString().split('T')[0];}
@@ -1455,8 +1462,8 @@ function diasChip(dateStr,status){
   return'<span class="dc dc-ok">📅 faltam '+d+' dias</span>';
 }
 
-function stclass(s){return{pendente:'bs-pendente',materia_falta:'bs-falta',aguardando_mp:'bs-aguardando',em_producao:'bs-producao',producao_iniciada:'bs-iniciada',revisao_qualidade:'bs-revisao',liberado:'bs-liberado',finalizado:'bs-finalizado',pref_formadeira:'bs-producao',pref_coladeira:'bs-producao',pref_pulverizadeira:'bs-producao',pref_torcedeira:'bs-producao',pref_dobradeira:'bs-producao',pref_ficha_falta:'bs-falta'}[s]||'bs-pendente';}
-function stlabel(s){return{pendente:'⏳ Pendente',materia_falta:'🚫 Mat.-prima em falta',aguardando_mp:'⏸️ Aguardando MP',producao_iniciada:'🟢 Produção iniciada',em_producao:'🔄 Em produção',revisao_qualidade:'🔍 Revisão de qualidade',liberado:'✅ Liberado',finalizado:'🏁 Finalizado',pref_formadeira:'🔧 Formadeira/Montadeira',pref_coladeira:'🪄 Coladeira',pref_pulverizadeira:'💨 Pulverizadeira',pref_torcedeira:'🌀 Torcedeira',pref_dobradeira:'📦 Dobradeira/Embalagem',pref_ficha_falta:'📄 Ficha de produção em falta',despachado_parcial:'📦 Despachado (Parcial)'}[s]||s||'—';}
+function stclass(s){return{pendente:'bs-pendente',materia_falta:'bs-falta',aguardando_mp:'bs-aguardando',em_producao:'bs-producao',producao_iniciada:'bs-iniciada',revisao_qualidade:'bs-revisao',galvanizacao_externa:'bs-galv',liberado:'bs-liberado',finalizado:'bs-finalizado',pref_formadeira:'bs-producao',pref_coladeira:'bs-producao',pref_pulverizadeira:'bs-producao',pref_torcedeira:'bs-producao',pref_dobradeira:'bs-producao',pref_ficha_falta:'bs-falta'}[s]||'bs-pendente';}
+function stlabel(s){return{pendente:'⏳ Pendente',materia_falta:'🚫 Mat.-prima em falta',aguardando_mp:'⏸️ Aguardando MP',producao_iniciada:'🟢 Produção iniciada',em_producao:'🔄 Em produção',revisao_qualidade:'🔍 Revisão de qualidade',galvanizacao_externa:'⚗️ Em galvanização externo',liberado:'✅ Liberado',finalizado:'🏁 Finalizado',pref_formadeira:'🔧 Formadeira/Montadeira',pref_coladeira:'🪄 Coladeira',pref_pulverizadeira:'💨 Pulverizadeira',pref_torcedeira:'🌀 Torcedeira',pref_dobradeira:'📦 Dobradeira/Embalagem',pref_ficha_falta:'📄 Ficha de produção em falta',despachado_parcial:'📦 Despachado (Parcial)'}[s]||s||'—';}
 
 function autoArchive(){
   const d=gdb();let ch=false;
@@ -1538,7 +1545,7 @@ function rSectorDashboard(cnt,role){
       if(p&&!p.isStock&&(p.sectors||[]).includes(sec))myItems.push({op,it,p});
     }));
     const total=myItems.length;
-    const emProd=myItems.filter(x=>x.it.status==='em_producao'||x.it.status.startsWith('pref_')).length;
+    const emProd=myItems.filter(x=>x.it.status==='em_producao'||x.it.status==='galvanizacao_externa'||x.it.status.startsWith('pref_')).length;
     const liberados=myItems.filter(x=>x.it.status==='liberado'||x.it.status==='revisao_qualidade').length;
     const bloq=myItems.filter(x=>x.it.status==='materia_falta'||x.it.status==='aguardando_mp').length;
     const pendentes=total-emProd-liberados-bloq;
@@ -1604,7 +1611,9 @@ async function refreshDashboard(){
   if(btn){btn.disabled=true;btn.textContent='↻ Atualizando...';}
   try{
     const r=await _sf('/rest/v1/app_data?key=eq.tgl_v3&select=data');
-    if(r.ok){const rows=await r.json();if(rows&&rows.length)_db={...idb(),...rows[0].data};}
+    if(r.ok){const rows=await r.json();if(rows&&rows.length)_db={...idb(),...rows[0].data,
+      products:_db.products||[],clients:_db.clients||[],rawMaterials:_db.rawMaterials||[],
+      packaging:_db.packaging||[],suppliers:_db.suppliers||[],users:_db.users||[]};}
   }catch{}
   rDashboard(cnt);
 }
@@ -3143,6 +3152,15 @@ const STOPS_PREFORMADOS=[
   {v:'materia_falta',l:'🚫 MP em falta'},
   {v:'pref_ficha_falta',l:'📄 Ficha de produção em falta'},
 ];
+const STOPS_ESTAMPARIA=[
+  {v:'pendente',l:'⏳ Pendente'},
+  {v:'em_producao',l:'🔄 Em produção'},
+  {v:'galvanizacao_externa',l:'⚗️ Em galvanização externo'},
+  {v:'revisao_qualidade',l:'🔍 Revisão de qualidade'},
+  {v:'liberado',l:'✅ Liberado'},
+  {v:'materia_falta',l:'🚫 Mat.-prima em falta'},
+  {v:'aguardando_mp',l:'⏸️ Aguardando MP'},
+];
 
 function rProducao(el2){
   const roles=_roles(S);
@@ -3222,7 +3240,7 @@ function goProducao(sec){
                   const p=d.products.find(x=>x.id===item.pid);
                   const globalIdx=op.items.indexOf(item);
                   const fl=[item.etiqueta?'🏷️ Etiqueta c/ logo':'',item.caixa?'📦 Caixa':'',item.gravacao?'✏️ Gravação':''].filter(Boolean).join(' ');
-                  const stopsForSec=sec==='preformados'?STOPS_PREFORMADOS:STOPS;const opts=stopsForSec.map(s=>'<option value="'+s.v+'" '+(item.status===s.v?'selected':'')+'>'+s.l+'</option>').join('');
+                  const stopsForSec=sec==='preformados'?STOPS_PREFORMADOS:sec==='estamparia'?STOPS_ESTAMPARIA:STOPS;const opts=stopsForSec.map(s=>'<option value="'+s.v+'" '+(item.status===s.v?'selected':'')+'>'+s.l+'</option>').join('');
                   const qRel=item.qtyReleased||0;
                   const isPartialRel=item.status==='liberado'&&qRel>0&&qRel<item.qty;
                   const qRestante=item.qty-qRel;
@@ -4056,7 +4074,12 @@ function closeGSearch(){
         _lastSavedMovIds=serverMovIds;
       }
 
-      const nd={...idb(),...rows[0].data,ops:mergedOps,stock:mergedStock,rawMaterialStock:mergedRmStock,packagingStock:mergedPkStock,rawMaterialMovements:mergedRmMovs,packagingMovements:mergedPkMovs};
+      // Entidades que vivem em tabelas dedicadas — preservar o _db atual (fonte de verdade),
+      // não sobrescrever com os arrays vazios que o blob carrega por design.
+      const nd={...idb(),...rows[0].data,
+        products:_db.products||[],clients:_db.clients||[],rawMaterials:_db.rawMaterials||[],
+        packaging:_db.packaging||[],suppliers:_db.suppliers||[],users:_db.users||[],
+        ops:mergedOps,stock:mergedStock,rawMaterialStock:mergedRmStock,packagingStock:mergedPkStock,rawMaterialMovements:mergedRmMovs,packagingMovements:mergedPkMovs};
       const _gracePassed=(Date.now()-_lastSaveAt)>15000;
       _checkForceLogout(nd);
       if(!S)return;
@@ -4255,7 +4278,7 @@ function chStatus(opId,idx,status,sec){
 function renderFocusContent(sec){
   const d=gdb();
   const fc=el('focus-content');if(!fc)return;
-  const stopsForSec=sec==='preformados'?STOPS_PREFORMADOS:STOPS;
+  const stopsForSec=sec==='preformados'?STOPS_PREFORMADOS:sec==='estamparia'?STOPS_ESTAMPARIA:STOPS;
   if(!_prodSort[sec])_prodSort[sec]={col:'deliveryDate',dir:1};
   const _ps=_prodSort[sec];
   const ops=d.ops.filter(o=>!o.archived&&o.status==='ativo').filter(op=>
