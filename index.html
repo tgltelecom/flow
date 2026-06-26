@@ -127,7 +127,8 @@ a{color:var(--green);text-decoration:none}
 .tw{overflow-x:auto;margin:-4px}
 table{width:100%;border-collapse:collapse;min-width:480px}
 thead th{padding:10px 14px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;
-  letter-spacing:.6px;color:var(--muted);border-bottom:1px solid var(--border);white-space:nowrap}
+  letter-spacing:.6px;color:var(--muted);border-bottom:1px solid var(--border);white-space:nowrap;
+  position:sticky;top:0;z-index:2;background:var(--bg-card)}
 tbody td{padding:13px 14px;border-bottom:1px solid rgba(255,255,255,.04);vertical-align:middle;font-size:13px}
 tbody tr:hover td{background:rgba(255,255,255,.02)}
 tbody tr:last-child td{border-bottom:none}
@@ -559,8 +560,15 @@ const SUPA_URL='https://bobzfvyqqxapvoabtejl.supabase.co';
 const SUPA_KEY='sb_publishable_yyFwUYtK5D24yeAsd6jkjQ_UuizdNAA';
 const _AUDIT_KEY='tgl_v3_audit'; // linha separada no banco para o log de auditoria
 let _auditLog=[];                     // mantido em memória; nunca entra no payload principal
-const APP_VERSION='1.3.2';
+const APP_VERSION='1.3.3';
 const APP_CHANGELOG={
+  '1.3.3':[
+    'Botão Atualizar para usuários de tablet (perfil único de setor)',
+    'Cabeçalhos de tabela fixos ao rolar nas telas de cadastro',
+    'Histórico de OP: adicionar e remover itens em OPs não finalizadas',
+    'Produção: busca por pedido/cliente e ordenação por todos os campos',
+    'Fornecedor em entrada de MP e embalagens: digitar para buscar',
+  ],
   '1.3.2':[
     'Correção crítica: dados não somem mais ao navegar entre cadastros',
     'Unidades MT (metro) e RL (rolo) disponíveis em todos os cadastros',
@@ -1428,6 +1436,7 @@ let _expSort={col:'deliveryDate',dir:1};
 let _expColeta='';
 let _histSort={col:'deliveryDate',dir:-1};
 let _prodSort={};
+let _prodSearch={};
 
 // ─── UTILS ───
 function el(id){return document.getElementById(id);}
@@ -2757,13 +2766,14 @@ function viewOP(id){
       const dt=new Date(pd.at);
       return'<div style="margin-top:5px;color:var(--sub)">📦 <strong>#'+(pi+1)+'</strong> '+fdate(pd.dispatchDate)+' às '+dt.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})+(pd.nfeNumber?' · NF '+esc(pd.nfeNumber):'')+'</div>';
     }).join('')+'</div>':'';
-  const rows=op.items.map(i=>{
+  const isActiveOP=op.status==='ativo'&&!op.archived;
+  const rows=op.items.map((i,idx)=>{
     const p=d.products.find(x=>x.id===i.pid);
     const fl=[i.etiqueta?'🏷️ Etiqueta c/ logo':'',i.caixa?'📦 Caixa':'',i.gravacao?'✏️ Gravação':''].filter(Boolean).join(' ');
     // Find per-item last dispatch timestamp from partialDispatches
     let itemDispStr='—';
     if(op.partialDispatches){
-      const oi=op.items.indexOf(i);
+      const oi=idx;
       const matches=[];
       op.partialDispatches.forEach(pd=>{
         if(pd.itemQtys){pd.itemQtys.forEach(q=>{if(q.idx===oi)matches.push(pd);});}
@@ -2778,14 +2788,14 @@ function viewOP(id){
     if(itemDispStr==='—'&&op.finalAt&&(i.partiallyDispatched||_itemFullyDisp(i)))itemDispStr=new Date(op.finalAt).toLocaleDateString('pt-BR')+' '+new Date(op.finalAt).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
     const qDisp=i.qtyDispatched||0;
     const qDispStr=qDisp>0?'<span style="font-size:11px;color:var(--warn)">'+fnum(qDisp)+'/'+fnum(i.qty)+'</span>':fnum(i.qty);
+    const removeBtn=isActiveOP?'<td><button class="btn btn-danger btn-sm" style="font-size:11px;padding:3px 7px" onclick="removeOPItem(\''+op.id+'\','+idx+')" title="Remover item">🗑️</button></td>':'<td></td>';
     return'<tr><td>'+esc(p?p.name:i.productName)+'</td><td><span class="sku">'+esc(i.sku||'—')+'</span></td>'+
       '<td>'+qDispStr+'</td>'+
       '<td><span class="bs '+stclass(i.status)+'">'+stlabel(i.status)+'</span></td>'+
       '<td style="font-size:12px">'+esc(i.obs||'—')+'</td>'+
       '<td style="font-size:12px">'+(fl||'—')+'</td>'+
-      '<td style="font-size:11px;color:var(--muted);white-space:nowrap">'+itemDispStr+'</td></tr>';
+      '<td style="font-size:11px;color:var(--muted);white-space:nowrap">'+itemDispStr+'</td>'+removeBtn+'</tr>';
   }).join('');
-  const isActiveOP=op.status==='ativo'&&!op.archived;
   // Edit block — only shown for active (non-finalized) OPs
   const editBlock=isActiveOP
     ?'<div style="margin-bottom:14px;padding:12px 14px;background:var(--bg-input);border-radius:8px;border:1px solid var(--border2)">'+
@@ -2807,6 +2817,9 @@ function viewOP(id){
       '</div>'+
     '</div>'
     :'';
+  const addItemBtn=isActiveOP
+    ?'<div style="margin-top:10px;text-align:right"><button class="btn btn-green btn-sm" onclick="openAddItemToOP(\''+op.id+'\')">➕ Adicionar Item</button></div>'
+    :'';
   Mopen('Pedido #'+op.opNum,
     '<div class="fgrid" style="margin-bottom:14px">'+
     '<div style="font-size:13px"><span style="color:var(--muted)">Cliente:</span> '+esc(op.clientName)+'</div>'+
@@ -2820,8 +2833,54 @@ function viewOP(id){
     '</div>'+
     editBlock+
     pdHtml+
-    '<table><thead><tr><th>Produto</th><th>SKU</th><th>Qtd</th><th>Status</th><th>Obs</th><th>Person.</th><th>Despacho</th></tr></thead><tbody>'+rows+'</tbody></table>',
+    '<table><thead><tr><th>Produto</th><th>SKU</th><th>Qtd</th><th>Status</th><th>Obs</th><th>Person.</th><th>Despacho</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>'+
+    addItemBtn,
     '<button class="btn btn-ghost" onclick="Mclose()">Fechar</button>','xl');
+}
+function removeOPItem(opId,idx){
+  const d=gdb(),op=d.ops.find(o=>o.id===opId);if(!op)return;
+  if(op.items.length<=1){toast('A OP deve ter ao menos 1 item','err');return;}
+  const item=op.items[idx];
+  if(!confirm('Remover o item "'+esc(item.productName||item.sku||'item')+'"\nda OP #'+op.opNum+'?'))return;
+  op.items.splice(idx,1);
+  logAction(d,'Item removido da OP','OP #'+op.opNum+' — '+esc(item.productName||item.sku));
+  sdb(d);toast('Item removido','ok');Mclose();setTimeout(()=>viewOP(opId),50);
+}
+function openAddItemToOP(opId){
+  const d=gdb();
+  const prods=d.products.filter(p=>!p.isStock);
+  const opts=prods.map(p=>'<option value="'+p.id+'">'+esc(p.name)+' ('+esc(p.sku)+')</option>').join('');
+  Mopen('➕ Adicionar Item à OP',
+    '<div class="fg"><label>Produto *</label><select id="ai-pid"><option value="">Selecione...</option>'+opts+'</select></div>'+
+    '<div class="fgrid">'+
+    '<div class="fg"><label>Quantidade *</label><input type="number" id="ai-qty" min="1" step="1" placeholder="1"></div>'+
+    '<div class="fg"><label>Observação</label><input type="text" id="ai-obs" placeholder="(opcional)"></div>'+
+    '</div>'+
+    '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px">'+
+    '<label class="ck-row"><input type="checkbox" id="ai-etq"> 🏷️ Etiqueta c/ logo</label>'+
+    '<label class="ck-row"><input type="checkbox" id="ai-cx"> 📦 Caixa</label>'+
+    '<label class="ck-row"><input type="checkbox" id="ai-grav"> ✏️ Gravação</label>'+
+    '</div>',
+    '<button class="btn btn-ghost" onclick="Mclose();setTimeout(()=>viewOP(\''+opId+'\'),50)">Cancelar</button>'+
+    '<button class="btn btn-green" onclick="submitAddItemToOP(\''+opId+'\')">✅ Adicionar</button>'
+  );
+}
+function submitAddItemToOP(opId){
+  const d=gdb(),op=d.ops.find(o=>o.id===opId);if(!op)return;
+  const pid=v('ai-pid'),obs=v('ai-obs').trim();
+  if(!pid){toast('Selecione o produto','err');return;}
+  const p=d.products.find(x=>x.id===pid);if(!p)return;
+  const unit=p.unit||'UN';
+  const qty=_parseQty(v('ai-qty'),unit);
+  if(qty<=0){toast('Quantidade deve ser maior que zero','err');return;}
+  const etq=el('ai-etq')&&el('ai-etq').checked;
+  const cx=el('ai-cx')&&el('ai-cx').checked;
+  const grav=el('ai-grav')&&el('ai-grav').checked;
+  op.items.push({pid,sku:p.sku,productName:p.name,qty,unit,status:'pendente',obs,
+    etiqueta:etq,caixa:cx,gravacao:grav,
+    stageLog:[{status:'pendente',by:S?S.name:'',at:Date.now()}]});
+  logAction(d,'Item adicionado à OP','OP #'+op.opNum+' — '+esc(p.name)+' x'+fnum(qty));
+  sdb(d);toast('Item adicionado','ok');Mclose();setTimeout(()=>viewOP(opId),50);
 }
 function saveOPLogistica(opId){
   const dt=(el('vop-dt')||{}).value||'';
@@ -3162,6 +3221,15 @@ const STOPS_ESTAMPARIA=[
   {v:'aguardando_mp',l:'⏸️ Aguardando MP'},
 ];
 
+async function _tabletRefresh(){
+  const btn=el('tablet-refresh-btn');
+  if(btn){btn.disabled=true;btn.innerHTML='🔄 Atualizando...';}
+  try{await _syncFromServer();}catch(e){console.warn('[TGL] tablet refresh:',e);}
+  const onTab=document.querySelector('.stab.on[id^="pst-"]');
+  const sec=onTab?onTab.id.replace('pst-',''):'preformados';
+  goProducao(sec);
+  if(btn){btn.disabled=false;btn.innerHTML='🔄 Atualizar';}
+}
 function rProducao(el2){
   const roles=_roles(S);
   const sectors=['preformados','estamparia','espinar'];
@@ -3170,12 +3238,19 @@ function rProducao(el2){
   // Default: expedicao-only goes straight to separação; sector operators go to their first sector
   const isExpOnly=roles.every(r=>r==='expedicao');
   const defaultSec=isExpOnly?'separacao':(sectors.find(s=>roles.includes(s))||'separacao');
+  const isSingleSectorUser=roles.length===1&&sectors.includes(roles[0]);
   const secTabs=sectors.filter(canSee).map(s=>'<button class="stab '+(s===defaultSec?'on':'')+'" id="pst-'+s+'" onclick="goProducao(\''+s+'\')">'+{preformados:'🧬 Preformados',estamparia:'🔨 Estamparia',espinar:'🌀 Espinar/Fita'}[s]+'</button>').join('');
   const sepTab=canSep?'<button class="stab '+(defaultSec==='separacao'?'on':'')+'" id="pst-separacao" onclick="goProducao(\'separacao\')">📦 Produção/Sep. Estoque</button>':'';
+  const refreshBtn=isSingleSectorUser
+    ?'<button id="tablet-refresh-btn" class="btn btn-green" onclick="_tabletRefresh()" style="font-size:15px;padding:10px 20px;border-radius:10px">🔄 Atualizar</button>'
+    :'';
   el2.innerHTML='<div class="ptitle">Produção</div>'+
     '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">'+
     '<div class="stabs" style="margin-bottom:0">'+secTabs+sepTab+'</div>'+
-    (sectors.some(canSee)?'<button class="btn btn-outline btn-sm" onclick="openFocusMode()" style="white-space:nowrap">🎯 Modo Foco</button>':'')+
+    '<div style="display:flex;gap:8px;align-items:center">'+
+    refreshBtn+
+    (sectors.some(canSee)&&!isSingleSectorUser?'<button class="btn btn-outline btn-sm" onclick="openFocusMode()" style="white-space:nowrap">🎯 Modo Foco</button>':'')+
+    '</div>'+
     '</div>'+
     '<div id="prod-c"></div>';
   goProducao(defaultSec);
@@ -3188,35 +3263,48 @@ function goProducao(sec){
   const labels={preformados:'🧵 Preformados',estamparia:'🔩 Estamparia (Ferragens)',espinar:'🔌 Espinar/Fita'};
   if(!_prodSort[sec])_prodSort[sec]={col:'deliveryDate',dir:1};
   const _ps=_prodSort[sec];
-  const ops=d.ops.filter(o=>!o.archived&&o.status==='ativo').filter(op=>
+  const q=(_prodSearch[sec]||'').toLowerCase().trim();
+  // Pre-compute meta for each OP so we can sort by items/progress
+  const allOps=d.ops.filter(o=>!o.archived&&o.status==='ativo').filter(op=>
     op.items.some(i=>{const p=d.products.find(x=>x.id===i.pid);return p&&!p.isStock&&(p.sectors||[]).includes(sec);})
-  ).sort((a,b)=>{
-    const col=_ps.col,dir=_ps.dir;
-    if(col==='opNum')return dir*esc(a.opNum).localeCompare(esc(b.opNum));
-    if(col==='clientName')return dir*(a.clientName||'').localeCompare(b.clientName||'');
-    return dir*(new Date(a.deliveryDate)-new Date(b.deliveryDate));
-  });
-
-  const ec=el('prod-c');
-  ec.innerHTML='<div class="card"><div class="card-header"><div><div class="card-title">'+labels[sec]+'</div><div class="card-sub">'+ops.length+' ordem(ns) ativa(s)</div></div></div>'+
-    (ops.length?'<div class="tw"><table><thead><tr>'+
-      '<th style="width:42px"></th>'+
-      '<th style="cursor:pointer" onclick="_setProdSort(\''+sec+'\',\'opNum\')">'+'Pedido '+_sArr('opNum',_prodSort[sec]||{col:'deliveryDate',dir:1})+'</th>'+
-      '<th style="cursor:pointer" onclick="_setProdSort(\''+sec+'\',\'clientName\')">'+'Cliente '+_sArr('clientName',_prodSort[sec]||{col:'deliveryDate',dir:1})+'</th>'+
-      '<th style="cursor:pointer" onclick="_setProdSort(\''+sec+'\',\'deliveryDate\')">'+'Prazo '+_sArr('deliveryDate',_prodSort[sec]||{col:'deliveryDate',dir:1})+'</th>'+
-      '<th>Itens</th><th>Progresso</th>'+
-      '</tr></thead><tbody id="prod-tb-'+sec+'"></tbody></table></div>':
-    '<div class="empty"><div class="ei">✅</div><p>Nenhuma OP pendente para este setor</p></div>')+'</div>';
-
-  if(!ops.length)return;
-  const tb=el('prod-tb-'+sec);
-  let html='';
-  ops.forEach(op=>{
+  );
+  const opsMeta=allOps.map(op=>{
     const secItems=op.items.filter(i=>{const p=d.products.find(x=>x.id===i.pid);return p&&!p.isStock&&(p.sectors||[]).includes(sec);});
     const lib=secItems.filter(i=>i.status==='liberado'&&(!i.qtyReleased||i.qtyReleased>=i.qty)).length;
     const libParcial=secItems.filter(i=>i.status==='liberado'&&i.qtyReleased&&i.qtyReleased<i.qty).length;
     const tot=secItems.length;
     const pct=tot?Math.round(lib/tot*100):0;
+    return{op,secItems,lib,libParcial,tot,pct};
+  }).filter(({op})=>!q||(op.opNum||'').toLowerCase().includes(q)||(op.clientName||'').toLowerCase().includes(q))
+  .sort((a,b)=>{
+    const col=_ps.col,dir=_ps.dir;
+    if(col==='opNum')return dir*esc(a.op.opNum).localeCompare(esc(b.op.opNum));
+    if(col==='clientName')return dir*(a.op.clientName||'').localeCompare(b.op.clientName||'');
+    if(col==='items')return dir*(a.tot-b.tot);
+    if(col==='pct')return dir*(a.pct-b.pct);
+    return dir*(new Date(a.op.deliveryDate)-new Date(b.op.deliveryDate));
+  });
+
+  const ec=el('prod-c');
+  const _sort=_prodSort[sec]||{col:'deliveryDate',dir:1};
+  ec.innerHTML='<div class="card"><div class="card-header">'+
+    '<div><div class="card-title">'+labels[sec]+'</div><div class="card-sub">'+opsMeta.length+' ordem(ns)</div></div>'+
+    '<input type="text" class="sinput" placeholder="🔍 Buscar pedido ou cliente..." value="'+esc(q)+'" oninput="_prodSearch[\''+sec+'\']=this.value;goProducao(\''+sec+'\')" style="width:220px;padding:6px 10px;font-size:13px">'+
+    '</div>'+
+    (opsMeta.length?'<div class="tw"><table><thead><tr>'+
+      '<th style="width:42px"></th>'+
+      '<th style="cursor:pointer" onclick="_setProdSort(\''+sec+'\',\'opNum\')">'+'Pedido '+_sArr('opNum',_sort)+'</th>'+
+      '<th style="cursor:pointer" onclick="_setProdSort(\''+sec+'\',\'clientName\')">'+'Cliente '+_sArr('clientName',_sort)+'</th>'+
+      '<th style="cursor:pointer" onclick="_setProdSort(\''+sec+'\',\'deliveryDate\')">'+'Prazo '+_sArr('deliveryDate',_sort)+'</th>'+
+      '<th style="cursor:pointer" onclick="_setProdSort(\''+sec+'\',\'items\')">Itens '+_sArr('items',_sort)+'</th>'+
+      '<th style="cursor:pointer" onclick="_setProdSort(\''+sec+'\',\'pct\')">Progresso '+_sArr('pct',_sort)+'</th>'+
+      '</tr></thead><tbody id="prod-tb-'+sec+'"></tbody></table></div>':
+    '<div class="empty"><div class="ei">✅</div><p>'+(q?'Nenhuma OP encontrada para "'+esc(q)+'"':'Nenhuma OP pendente para este setor')+'</p></div>')+'</div>';
+
+  if(!opsMeta.length)return;
+  const tb=el('prod-tb-'+sec);
+  let html='';
+  opsMeta.forEach(({op,secItems,lib,libParcial,tot,pct})=>{
     const expandId='px-'+op.id+'-'+sec;
     html+=`
       <tr>
@@ -4619,17 +4707,39 @@ function delForn(id){
   sdb(d);toast('Excluído','ok');_renderFornTable();
 }
 
+// ── Autocomplete fornecedor helper ──
+function _suppDl(d){
+  return'<datalist id="mv-supp-dl">'+d.suppliers.map(s=>'<option value="'+esc(s.name)+'">').join('')+'</datalist>';
+}
+function _suppAutoHtml(label){
+  return'<div class="fg"><label>'+label+'</label>'+
+    '<input type="text" id="mv-supp-txt" list="mv-supp-dl" autocomplete="off" placeholder="Digite para buscar..." oninput="_resolveSuppInput()">'+
+    '<input type="hidden" id="mv-supp">'+
+    '</div>';
+}
+function _resolveSuppInput(){
+  const txt=el('mv-supp-txt'),hid=el('mv-supp');if(!txt||!hid)return;
+  const q=txt.value.trim().toLowerCase();
+  const s=gdb().suppliers.find(x=>x.name.toLowerCase()===q);
+  hid.value=s?s.id:'';
+}
+function _getSuppId(required){
+  _resolveSuppInput();
+  const sid=v('mv-supp');
+  if(required&&!sid){toast('Fornecedor não encontrado. Selecione um fornecedor cadastrado.','err');return null;}
+  return sid||null;
+}
 // ═══════════════════════════════════════════════
 // ── MOVIMENTAÇÕES: MATÉRIA PRIMA ────────────────
 // ═══════════════════════════════════════════════
 function openEntradaMP(mid){
   const d=gdb();
   const rmOpts=d.rawMaterials.map(m=>'<option value="'+m.id+'"'+(mid&&m.id===mid?' selected':'')+'>'+esc(m.code)+' — '+esc(m.name)+'</option>').join('');
-  const suppOpts='<option value="">Selecione...</option>'+d.suppliers.map(s=>'<option value="'+s.id+'">'+esc(s.name)+'</option>').join('');
   Mopen('➕ Entrada de Matéria-Prima',
+    _suppDl(d)+
     '<div class="fgrid">'+
     '<div class="fg"><label>Produto *</label><select id="mv-item">'+rmOpts+'</select></div>'+
-    '<div class="fg"><label>Fornecedor *</label><select id="mv-supp">'+suppOpts+'</select></div>'+
+    _suppAutoHtml('Fornecedor *')+
     '</div>'+
     '<div class="fgrid">'+
     '<div class="fg"><label>Quantidade *</label><input type="number" id="mv-qty" min="0.0001" step="0.0001" placeholder="0"></div>'+
@@ -4643,11 +4753,11 @@ function openEntradaMP(mid){
 }
 function submitEntradaMP(){
   const d=gdb();
-  const mid=v('mv-item'),sid=v('mv-supp'),nf=v('mv-nf').trim(),date=v('mv-date'),obs=v('mv-obs').trim();
+  const mid=v('mv-item'),nf=v('mv-nf').trim(),date=v('mv-date'),obs=v('mv-obs').trim();
+  const sid=_getSuppId(true);if(sid===null)return;
   const _rm=d.rawMaterials.find(x=>x.id===mid);const _unit=_rm?_rm.unit||'KG':'KG';
   const qty=_parseQty(v('mv-qty'),_unit);
   if(!mid){toast('Selecione o produto','err');return;}
-  if(!sid){toast('Selecione o fornecedor','err');return;}
   if(qty<=0){toast('Quantidade deve ser maior que zero','err');return;}
   if(!nf){toast('Informe o número da nota fiscal','err');return;}
   if(!date){toast('Informe a data','err');return;}
@@ -4712,13 +4822,15 @@ function openInventarioMP(mid){
   const m=d.rawMaterials.find(x=>x.id===mid);if(!m)return;
   const _unit=m.unit||'KG';
   const st=d.rawMaterialStock[mid]||{total:0,bySupplier:{}};
-  const suppOpts=d.suppliers.map(s=>{
+  // Build datalist with current stock info as label hint
+  const suppDlWithStock='<datalist id="mv-supp-dl">'+d.suppliers.map(s=>{
     const qAtu=(st.bySupplier||{})[s.id]||0;
-    return'<option value="'+s.id+'">'+esc(s.name)+' (atual: '+fqty(qAtu,_unit)+' '+_unit+')</option>';
-  }).join('');
+    return'<option value="'+esc(s.name)+'">'+(qAtu>0?' (atual: '+fqty(qAtu,_unit)+' '+_unit+')':'');
+  }).join('')+'</datalist>';
   Mopen('📋 Inventário — '+esc(m.name),
     '<div class="alert alert-info" style="font-size:13px;margin-bottom:12px">Informe a quantidade <strong>real contada</strong>. O sistema calculará o ajuste automaticamente.</div>'+
-    '<div class="fg"><label>Fornecedor *</label><select id="mv-supp"><option value="">Selecione...</option>'+suppOpts+'</select></div>'+
+    suppDlWithStock+
+    _suppAutoHtml('Fornecedor *')+
     '<div class="fgrid">'+
     '<div class="fg"><label>Quantidade Contada *</label><input type="number" id="mv-qty" min="0" step="0.0001" placeholder="0"></div>'+
     '<div class="fg"><label>Data do Inventário *</label><input type="date" id="mv-date" value="'+today8601()+'"></div>'+
@@ -4731,8 +4843,8 @@ function openInventarioMP(mid){
 function submitInventarioMP(mid){
   const d=gdb();
   const _rm=d.rawMaterials.find(x=>x.id===mid);const _unit=_rm?_rm.unit||'KG':'KG';
-  const sid=v('mv-supp'),qty=_parseQty(v('mv-qty'),_unit);
-  if(!sid){toast('Selecione o fornecedor','err');return;}
+  const sid=_getSuppId(true);if(sid===null)return;
+  const qty=_parseQty(v('mv-qty'),_unit);
   if(isNaN(qty)||qty<0){toast('Quantidade inválida','err');return;}
   const antes=_rmStockBySupp(d,mid,sid);
   const delta=qty-antes;
@@ -4753,11 +4865,11 @@ function _rmName(d,mid){const m=d.rawMaterials.find(x=>x.id===mid);return m?m.na
 function openEntradaEmb(pid){
   const d=gdb();
   const opts=d.packaging.map(p=>'<option value="'+p.id+'"'+(pid&&p.id===pid?' selected':'')+'>'+esc(p.code)+' — '+esc(p.name)+'</option>').join('');
-  const suppOpts='<option value="">Selecione...</option>'+d.suppliers.map(s=>'<option value="'+s.id+'">'+esc(s.name)+'</option>').join('');
   Mopen('➕ Entrada de Embalagem',
+    _suppDl(d)+
     '<div class="fgrid">'+
     '<div class="fg"><label>Embalagem *</label><select id="mv-item">'+opts+'</select></div>'+
-    '<div class="fg"><label>Fornecedor</label><select id="mv-supp">'+suppOpts+'</select></div>'+
+    _suppAutoHtml('Fornecedor')+
     '</div>'+
     '<div class="fgrid">'+
     '<div class="fg"><label>Quantidade *</label><input type="number" id="mv-qty" min="0.0001" step="0.0001" placeholder="0"></div>'+
@@ -4771,7 +4883,8 @@ function openEntradaEmb(pid){
 }
 function submitEntradaEmb(){
   const d=gdb();
-  const pid=v('mv-item'),sid=v('mv-supp'),nf=v('mv-nf').trim(),date=v('mv-date'),obs=v('mv-obs').trim();
+  const pid=v('mv-item'),nf=v('mv-nf').trim(),date=v('mv-date'),obs=v('mv-obs').trim();
+  const sid=_getSuppId(false);// fornecedor é opcional em embalagens
   const _emb=d.packaging.find(x=>x.id===pid);const _unit=_emb?_emb.unit||'UN':'UN';
   const qty=_parseQty(v('mv-qty'),_unit);
   if(!pid){toast('Selecione a embalagem','err');return;}
