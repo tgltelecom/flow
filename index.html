@@ -102,18 +102,6 @@ a{color:var(--green);text-decoration:none}
 .btn-logout{background:transparent;color:var(--muted);border:1px solid var(--border);
   border-radius:6px;padding:5px 12px;font-size:12px;cursor:pointer}
 .btn-logout:hover{color:var(--danger);border-color:var(--danger)}
-/* ── NOTIFICATION BELL ── */
-.bell-wrap{position:relative;display:inline-flex;align-items:center}
-.bell-btn{background:none;border:none;cursor:pointer;padding:4px 8px;font-size:18px;color:var(--text);border-radius:var(--r);line-height:1;transition:background .15s}
-.bell-btn:hover{background:var(--bg-card2)}
-.bell-badge{position:absolute;top:-2px;right:0px;background:#ef4444;color:#fff;border-radius:10px;font-size:10px;font-weight:700;padding:1px 5px;min-width:16px;text-align:center;pointer-events:none;line-height:14px}
-.notif-drop{position:absolute;right:0;top:calc(100% + 8px);width:340px;max-height:420px;overflow-y:auto;background:var(--bg-card2);border:1px solid var(--border2);border-radius:var(--r);box-shadow:var(--sh);z-index:700;display:none}
-.notif-drop.open{display:block}
-.notif-item{padding:10px 14px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .1s}
-.notif-item:last-child{border-bottom:none}
-.notif-item:hover{background:var(--bg-card)}
-.notif-item.unread{border-left:3px solid var(--green)}
-.notif-empty{padding:24px;text-align:center;color:var(--muted);font-size:13px}
 
 /* ── CONTENT ── */
 .app-content{flex:1;padding:28px 24px;max-width:1440px;width:100%;margin:0 auto}
@@ -538,11 +526,6 @@ tbody tr:last-child td{border-bottom:none}
     </div>
     <div class="header-right">
       <span id="sync-badge" style="display:none;font-size:11px;padding:3px 10px;border-radius:10px;background:rgba(34,197,94,.15);color:#22c55e;border:1px solid rgba(34,197,94,.3)">● Online</span>
-      <div class="bell-wrap" id="bell-wrap" style="display:none">
-        <button class="bell-btn" id="bell-btn" onclick="_toggleBell()" title="Notificações">🔔</button>
-        <span class="bell-badge" id="bell-badge" style="display:none"></span>
-        <div class="notif-drop" id="notif-drop"></div>
-      </div>
       <span class="user-chip" id="huser"></span>
       <button class="btn-logout" onclick="doLogout()">Sair</button>
     </div>
@@ -577,14 +560,8 @@ const SUPA_URL='https://bobzfvyqqxapvoabtejl.supabase.co';
 const SUPA_KEY='sb_publishable_yyFwUYtK5D24yeAsd6jkjQ_UuizdNAA';
 const _AUDIT_KEY='tgl_v3_audit'; // linha separada no banco para o log de auditoria
 let _auditLog=[];                     // mantido em memória; nunca entra no payload principal
-const APP_VERSION='1.3.4';
+const APP_VERSION='1.3.3';
 const APP_CHANGELOG={
-  '1.3.4':[
-    'Sino de notificações: alerta quando produção libera itens (para expedição)',
-    'Sino de notificações: alerta de OP com itens sem estoque (para comprador e expedição)',
-    'Bug corrigido: mensagem "Sistema Atualizado" aparecia sem motivo',
-    'Bug corrigido: status online/offline no dashboard agora atualiza em tempo real',
-  ],
   '1.3.3':[
     'Botão Atualizar para usuários de tablet (perfil único de setor)',
     'Cabeçalhos de tabela fixos ao rolar nas telas de cadastro',
@@ -1109,7 +1086,7 @@ function _checkConflicts(sent,merged){
 }
 
 function refreshCurrentTab(){
-  const active=document.querySelector('.nav-btn.on');
+  const active=document.querySelector('.nav-item.on');
   if(active)active.click();
 }
 
@@ -1123,7 +1100,7 @@ function setSyncBadge(ok){
 
 function gdb(){return _db||idb();}
 function sdb(d){_db=d;try{localStorage.setItem('tgl_bk',JSON.stringify(d));}catch{}saveDBRemote(d);}
-function idb(){return{users:[{id:'u1',name:'Administrador',email:'admin@tgltelecom.com.br',password:'admin123',role:'admin',firstAccess:false,pending:false}],clients:[],products:[],ops:[],stock:{},seq:1000,presence:{},auditLog:[],alerts:{},forceLogout:{},rawMaterials:[],packaging:[],suppliers:[],rawMaterialStock:{},packagingStock:{},rawMaterialMovements:[],packagingMovements:[],purchaseOrders:[],notifications:[]};}
+function idb(){return{users:[{id:'u1',name:'Administrador',email:'admin@tgltelecom.com.br',password:'admin123',role:'admin',firstAccess:false,pending:false}],clients:[],products:[],ops:[],stock:{},seq:1000,presence:{},auditLog:[],alerts:{},forceLogout:{},rawMaterials:[],packaging:[],suppliers:[],rawMaterialStock:{},packagingStock:{},rawMaterialMovements:[],packagingMovements:[],purchaseOrders:[]};}
 function uid(){return '_'+Math.random().toString(36).substr(2,9);}
 function logAction(d,action,details){
   if(!S)return;
@@ -1214,8 +1191,6 @@ function startApp(u){
   el('app').classList.add('on');
   el('huser').textContent=u.name+' · '+rlabelUser(u);
   buildNav();navFirst();
-  const bw=el('bell-wrap');if(bw)bw.style.display='inline-flex';
-  renderBell();
   // Show changelog modal if version changed, then check alerts
   setTimeout(()=>{_checkChangelog(u);setTimeout(()=>{_checkAlert();setTimeout(()=>{if(!el('M').classList.contains('open'))_checkStockAlerts();},800);},600);},400);
 }
@@ -1238,6 +1213,11 @@ function _dismissChangelog(){
   const d=gdb();
   const ui=d.users.findIndex(x=>x.id===S.id);
   if(ui>=0)d.users[ui].lastSeenVersion=APP_VERSION;
+  // Force logout de todos os outros ao detectar nova versão
+  if(!d.forceLogout)d.forceLogout={};
+  d.forceLogout._all=Date.now();
+  // Manter o próprio usuário logado gravando o _loginAt acima do trigger
+  if(S)d.forceLogout['_skip_'+S.id]=Date.now();
   sdb(d);
   Mclose();
 }
@@ -1292,130 +1272,6 @@ function sendAlert(uid){
   logAction(d,'Alerta enviado',d.users.find(u=>u.id===uid)?.name||uid);
   sdb(d);Mclose();toast('Alerta enviado!','ok');
 }
-// ─── NOTIFICATIONS ────────────────────────────────────────────────────────────
-const NOTIF_TTL=4*60*60*1000; // 4 horas
-const _SEC_LABEL={'preformados':'Preformados','estamparia':'Estamparia','espinar':'Espinar'};
-
-function _createNotif(type,targetRoles,message,detail){
-  const d=gdb();
-  if(!d.notifications)d.notifications=[];
-  // Limpa expiradas
-  const now=Date.now();
-  d.notifications=d.notifications.filter(n=>(now-n.createdAt)<NOTIF_TTL);
-  d.notifications.push({id:uid(),type,targetRoles,message,detail,createdAt:now,readBy:{}});
-  sdb(d);
-  renderBell();
-}
-
-function _getMyNotifs(){
-  if(!S)return[];
-  const d=gdb();
-  if(!d.notifications)return[];
-  const now=Date.now();
-  const myRoles=_roles(S)||[];
-  return(d.notifications||[])
-    .filter(n=>n.targetRoles&&n.targetRoles.some(r=>myRoles.includes(r))&&(now-n.createdAt)<NOTIF_TTL)
-    .sort((a,b)=>b.createdAt-a.createdAt);
-}
-
-function renderBell(){
-  const wrap=el('bell-wrap');const badge=el('bell-badge');
-  if(!wrap||!S)return;
-  const notifs=_getMyNotifs();
-  if(!notifs.length){badge.style.display='none';return;}
-  const unread=notifs.filter(n=>!n.readBy||!n.readBy[S.id]);
-  if(unread.length>0){badge.textContent=unread.length>99?'99+':String(unread.length);badge.style.display='inline-block';}
-  else{badge.style.display='none';}
-}
-
-function _bellTimeAgo(ts){
-  const m=Math.floor((Date.now()-ts)/60000);
-  if(m<1)return'agora mesmo';
-  if(m<60)return m+'min atrás';
-  const h=Math.floor(m/60);
-  if(h<24)return h+'h atrás';
-  return Math.floor(h/24)+'d atrás';
-}
-
-function _toggleBell(){
-  const drop=el('notif-drop');if(!drop)return;
-  if(drop.classList.contains('open')){drop.classList.remove('open');return;}
-  _renderNotifDrop();
-  drop.classList.add('open');
-  setTimeout(()=>document.addEventListener('click',_closeBellOutside,{once:true,capture:true}),0);
-}
-
-function _closeBellOutside(e){
-  const wrap=el('bell-wrap');
-  if(wrap&&wrap.contains(e.target)){
-    setTimeout(()=>document.addEventListener('click',_closeBellOutside,{once:true,capture:true}),0);
-    return;
-  }
-  const drop=el('notif-drop');if(drop)drop.classList.remove('open');
-}
-
-function _renderNotifDrop(){
-  const drop=el('notif-drop');if(!drop||!S)return;
-  const notifs=_getMyNotifs();
-  if(!notifs.length){drop.innerHTML='<div class="notif-empty">Sem notificações</div>';return;}
-  drop.innerHTML=notifs.map(n=>{
-    const isUnread=!n.readBy||!n.readBy[S.id];
-    return'<div class="notif-item'+(isUnread?' unread':'')+'" onclick="_openNotif(\''+n.id+'\')">'+
-      '<div style="font-size:12px;font-weight:600;margin-bottom:3px;line-height:1.4">'+esc(n.message)+'</div>'+
-      '<div style="font-size:11px;color:var(--muted)">'+_bellTimeAgo(n.createdAt)+(isUnread?' · <strong style=\"color:var(--green)\">Nova</strong>':'')+'</div>'+
-    '</div>';
-  }).join('');
-}
-
-function _openNotif(id){
-  const d=gdb();
-  if(!d.notifications)return;
-  const ni=d.notifications.findIndex(n=>n.id===id);
-  if(ni<0)return;
-  const n=d.notifications[ni];
-  // Marcar como lido
-  if(!n.readBy)n.readBy={};
-  const wasUnread=!n.readBy[S.id];
-  if(wasUnread)n.readBy[S.id]=Date.now();
-  sdb(d);
-  renderBell();
-  const drop=el('notif-drop');if(drop)drop.classList.remove('open');
-  Mopen('🔔 Notificação',
-    '<div style="font-size:14px;font-weight:600;margin-bottom:12px;line-height:1.4">'+esc(n.message)+'</div>'+
-    '<div style="font-size:13px;line-height:1.7;white-space:pre-wrap;color:var(--sub)">'+esc(n.detail)+'</div>'+
-    '<div style="margin-top:14px;font-size:11px;color:var(--muted);border-top:1px solid var(--border);padding-top:10px">'+_bellTimeAgo(n.createdAt)+'</div>',
-    '<button class="btn btn-ghost" onclick="_unreadNotif(\''+id+'\');Mclose()">Manter como não lido</button>'+
-    '<button class="btn btn-green" onclick="Mclose()">Lido</button>'
-  );
-}
-
-function _unreadNotif(id){
-  const d=gdb();
-  if(!d.notifications)return;
-  const ni=d.notifications.findIndex(n=>n.id===id);
-  if(ni>=0&&d.notifications[ni].readBy){
-    delete d.notifications[ni].readBy[S.id];
-    sdb(d);renderBell();
-  }
-}
-
-// Disparar notificação Tipo A: item liberado pela produção → expedição
-function _notifLiberado(d,op,item,sec){
-  const p=d.products&&d.products.find(x=>x.id===item.pid);
-  const prodName=p?p.name:item.productName||'Produto';
-  const qty=item.qtyReleased||item.qty;
-  const unit=item.unit||'PC';
-  const secLabel=_SEC_LABEL[sec]||sec;
-  _createNotif(
-    'liberado',
-    ['expedicao'],
-    'Novos itens liberados por '+secLabel+' — Pedido #'+op.opNum,
-    'Setor: '+secLabel+
-    '\nPedido: #'+op.opNum+' — '+op.clientName+
-    '\n\nItem liberado:\n• '+prodName+' ('+qty+' '+unit+')'
-  );
-}
-
 // ─── FORCE LOGOUT ─────────────────────────────────────────────────────────────
 function forceLogoutUser(uid){
   if(!confirm('Deslogar este usuário?'))return;
@@ -2790,31 +2646,7 @@ function doSaveOP(dt,tr,col,obs,cliObj){
   };
   d.ops.push(op);
   logAction(d,'OP criada','Pedido #'+op.opNum+' — '+op.clientName+' ('+op.items.length+' item(s))');
-  // Verificar itens de estoque sem saldo → notificar comprador e expedição
-  const _semStk=op.items.filter(i=>{
-    const _p=d.products&&d.products.find(x=>x.id===i.pid);
-    if(!_p||!_p.isStock)return false;
-    const _q=d.stock&&d.stock[i.pid];
-    return _q===undefined||_q===null||_q<=0;
-  });
   sdb(d);
-  if(_semStk.length>0){
-    const _iList=_semStk.map(i=>{
-      const _p2=d.products&&d.products.find(x=>x.id===i.pid);
-      const _q2=d.stock&&d.stock[i.pid];
-      const _stk=_q2===undefined||_q2===null?'sem registro':'estoque: '+_q2;
-      return'• '+(_p2?_p2.name:i.productName||'?')+' — Qtd pedida: '+i.qty+' '+( i.unit||'PC')+' ('+_stk+')';
-    }).join('\n');
-    _createNotif(
-      'semestoque',
-      ['comprador','expedicao'],
-      'Novo pedido incluído com itens sem estoque — OP #'+op.opNum,
-      'Pedido: #'+op.opNum+' — '+op.clientName+
-      '\nEntrega: '+fdate(op.deliveryDate)+
-      '\n\nItens sem estoque:\n'+_iList+
-      '\n\nVerifique o estoque e providencie reposição antes da data de entrega.'
-    );
-  }
   Mclose();_draft=null;
   saveModal('OP salva com sucesso!','Pedido <strong>#'+esc(op.opNum)+'</strong> — '+esc(op.clientName)+'<br>'+op.items.length+' item(s) · Entrega: '+fdate(dt));
   setTimeout(()=>pstab('hist'),100);
@@ -3560,7 +3392,6 @@ function confirmLiberarParcial(opId,idx,sec){
   const p2=d.products.find(x=>x.id===item.pid);
   logAction(d,'Liberação parcial','OP #'+d.ops[oi].opNum+' — '+(p2?p2.name:item.productName)+': '+qty+'/'+item.qty+' un.');
   sdb(d);toast('Liberado '+qty+' un.','ok');
-  if(['preformados','estamparia','espinar'].includes(sec))_notifLiberado(d,d.ops[oi],item,sec);
   goProducao(sec);
   setTimeout(()=>{
     const row=el('px-'+opId+'-'+sec);if(row)row.style.display='table-row';
@@ -3578,7 +3409,6 @@ function updSt(opId,idx,status,sec){
   const _op=d.ops[oi];const _it=_op.items[idx];const _pr=d.products.find(x=>x.id===_it.pid);
   logAction(d,'Status alterado','OP #'+_op.opNum+' — '+(_pr?_pr.name:_it.productName)+': '+stlabel(status));
   sdb(d);toast('Status atualizado','ok',1500);
-  if(status==='liberado'&&['preformados','estamparia','espinar'].includes(sec))_notifLiberado(d,_op,_it,sec);
   goProducao(sec);
   setTimeout(()=>{
     const expandId='px-'+opId+'-'+sec;
@@ -4345,7 +4175,6 @@ function closeGSearch(){
          &&JSON.stringify(nd)!==JSON.stringify(_db)){
         _db=nd;try{localStorage.setItem('tgl_bk',JSON.stringify(nd));}catch{}
         if(!el('M').classList.contains('open'))refreshCurrentTab();
-        renderBell();
       }
       if(S&&!el('M').classList.contains('open'))_checkAlert();
       setSyncBadge(true);
@@ -4519,12 +4348,6 @@ function _commitStatus(opId,itemIdx,status,sec,renderFn,batch){
   });
   sdb(d);
   toast(batch.length?'Status aplicado em '+(batch.length+1)+' pedido(s)':'Status atualizado','ok',1800);
-  if(status==='liberado'&&['preformados','estamparia','espinar'].includes(sec)){
-    [opId,...batch.map(b=>b.opId)].forEach(oid=>{
-      const _no=d.ops.find(o=>o.id===oid);
-      if(_no)_notifLiberado(d,_no,oid===opId?_cit:(_no.items[batch.find(b=>b.opId===oid)?.itemIdx]||{}),sec);
-    });
-  }
   renderFn();
 }
 
