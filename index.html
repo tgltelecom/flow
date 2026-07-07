@@ -577,8 +577,13 @@ const SUPA_URL='https://bobzfvyqqxapvoabtejl.supabase.co';
 const SUPA_KEY='sb_publishable_yyFwUYtK5D24yeAsd6jkjQ_UuizdNAA';
 const _AUDIT_KEY='tgl_v3_audit'; // linha separada no banco para o log de auditoria
 let _auditLog=[];                     // mantido em memória; nunca entra no payload principal
-const APP_VERSION='1.3.4';
+const APP_VERSION='1.3.5';
 const APP_CHANGELOG={
+  '1.3.5':[
+    'Campo de produto com busca automática ao adicionar item em OP',
+    'Bug corrigido: botão Atualizar no dashboard não limpa mais os dados',
+    'Bug corrigido: controle de estoque exibe quantidades corretamente',
+  ],
   '1.3.4':[
     'Sino de notificações: alerta quando produção libera itens (para expedição)',
     'Sino de notificações: alerta de OP com itens sem estoque (para comprador e expedição)',
@@ -1761,15 +1766,43 @@ function rSectorDashboard(cnt,role){
 }
 async function refreshDashboard(){
   // Busca dados frescos do servidor antes de re-renderizar
+  // FIX v1.3.5: também recarrega ops e estoque das tabelas dedicadas
   const cnt=el('acontent');
   const btn=cnt.querySelector('.dash-refresh-btn');
   if(btn){btn.disabled=true;btn.textContent='↻ Atualizando...';}
   try{
-    const r=await _sf('/rest/v1/app_data?key=eq.tgl_v3&select=data');
-    if(r.ok){const rows=await r.json();if(rows&&rows.length)_db={...idb(),...rows[0].data,
-      products:_db.products||[],clients:_db.clients||[],rawMaterials:_db.rawMaterials||[],
-      packaging:_db.packaging||[],suppliers:_db.suppliers||[],users:_db.users||[]};}
+    const [blobRes,opsRes,stockRes]=await Promise.all([
+      _sf('/rest/v1/app_data?key=eq.tgl_v3&select=data'),
+      _sf('/rest/v1/'+_OPS_TABLE+'?select=id,data'),
+      _sf('/rest/v1/'+_STOCK_TABLE+'?select=id,data')
+    ]);
+    if(blobRes.ok){
+      const rows=await blobRes.json();
+      if(rows&&rows.length){
+        // Reconstrói ops a partir da tabela dedicada
+        let freshOps=_db.ops||[];
+        if(opsRes.ok){const opsRows=await opsRes.json();freshOps=opsRows.map(r=>r.data);}
+        // Reconstrói estoque a partir da tabela dedicada
+        let freshStock=_db.stock||{},freshRm=_db.rawMaterialStock||{},freshPk=_db.packagingStock||{};
+        if(stockRes.ok){
+          const srows=await stockRes.json();const ns={},nrm={},npk={};
+          srows.forEach(({id,data})=>{
+            if(id.startsWith('P:'))ns[id.slice(2)]=data;
+            else if(id.startsWith('RM:'))nrm[id.slice(3)]=data;
+            else if(id.startsWith('PK:')){npk[id.slice(3)]=data&&typeof data==='object'&&'qty' in data?data.qty:data;}
+          });
+          freshStock=ns;freshRm=nrm;freshPk=npk;
+        }
+        _db={...idb(),...rows[0].data,
+          products:_db.products||[],clients:_db.clients||[],rawMaterials:_db.rawMaterials||[],
+          packaging:_db.packaging||[],suppliers:_db.suppliers||[],users:_db.users||[],
+          ops:freshOps,stock:freshStock,rawMaterialStock:freshRm,packagingStock:freshPk,
+          rawMaterialMovements:_db.rawMaterialMovements||[],packagingMovements:_db.packagingMovements||[]};
+        try{localStorage.setItem('tgl_bk',JSON.stringify(_db));}catch{}
+      }
+    }
   }catch{}
+  if(btn){btn.disabled=false;btn.textContent='↻ Atualizar';}
   rDashboard(cnt);
 }
 function rDashboard(cnt){
@@ -3022,9 +3055,16 @@ function removeOPItem(opId,idx){
 function openAddItemToOP(opId){
   const d=gdb();
   const prods=d.products.filter(p=>!p.isStock);
-  const opts=prods.map(p=>'<option value="'+p.id+'">'+esc(p.name)+' ('+esc(p.sku)+')</option>').join('');
+  const opts=prods.map(p=>'<div class="ac-opt" data-pid="'+p.id+'">'+(p.sku?'<span class="sku">'+esc(p.sku)+'</span> ':'')+esc(p.name)+'</div>').join('');
   Mopen('➕ Adicionar Item à OP',
-    '<div class="fg"><label>Produto *</label><select id="ai-pid"><option value="">Selecione...</option>'+opts+'</select></div>'+
+    '<div class="fg"><label>Produto *</label>'+
+    '<div class="ac-wrap">'+
+      '<input type="text" id="ai-inp" placeholder="🔍 SKU ou nome do produto..." autocomplete="off" data-pid=""'+
+        ' oninput="aiACFilter()" onfocus="aiACFilter()" onblur="setTimeout(()=>aiACClose(),220)" style="width:100%">'+
+      '<div class="ac-drop" id="ai-drop" style="display:none">'+opts+
+        '<div class="ac-opt" id="ai-new" style="display:none;color:var(--green);font-style:italic" data-new="1">➕ Cadastrar novo produto...</div>'+
+      '</div>'+
+    '</div></div>'+
     '<div class="fgrid">'+
     '<div class="fg"><label>Quantidade *</label><input type="number" id="ai-qty" min="1" step="1" placeholder="1"></div>'+
     '<div class="fg"><label>Observação</label><input type="text" id="ai-obs" placeholder="(opcional)"></div>'+
@@ -3037,10 +3077,39 @@ function openAddItemToOP(opId){
     '<button class="btn btn-ghost" onclick="Mclose();setTimeout(()=>viewOP(\''+opId+'\'),50)">Cancelar</button>'+
     '<button class="btn btn-green" onclick="submitAddItemToOP(\''+opId+'\')">✅ Adicionar</button>'
   );
+  // Conecta cliques nas opções após o modal renderizar
+  setTimeout(()=>{
+    const drop=el('ai-drop');if(!drop)return;
+    drop.querySelectorAll('.ac-opt:not([data-new])').forEach(opt=>{
+      opt.addEventListener('mousedown',e=>{
+        e.preventDefault();
+        const p=gdb().products.find(x=>x.id===opt.dataset.pid);if(!p)return;
+        const inp=el('ai-inp');
+        inp.value=(p.sku?p.sku+' | ':'')+p.name;
+        inp.dataset.pid=p.id;
+        aiACClose();
+      });
+    });
+    const newBtn=el('ai-new');
+    if(newBtn){newBtn.addEventListener('mousedown',e=>{
+      e.preventDefault();Mclose();
+      stab('prod');toast('Cadastre o produto e tente novamente','info');
+    });}
+  },60);
 }
 function submitAddItemToOP(opId){
   const d=gdb(),op=d.ops.find(o=>o.id===opId);if(!op)return;
-  const pid=v('ai-pid'),obs=v('ai-obs').trim();
+  const inp=el('ai-inp');
+  let pid=inp?inp.dataset.pid:'';
+  // Fallback: busca por SKU ou nome se não foi selecionado via autocomplete
+  if(!pid&&inp&&inp.value.trim()){
+    const val=inp.value.trim();
+    const skuPart=val.split('|')[0].trim().toUpperCase();
+    const found=d.products.find(p=>p.sku&&p.sku.toUpperCase()===skuPart)
+      ||d.products.find(p=>p.name.toLowerCase()===val.toLowerCase());
+    if(found)pid=found.id;
+  }
+  const obs=v('ai-obs').trim();
   if(!pid){toast('Selecione o produto','err');return;}
   const p=d.products.find(x=>x.id===pid);if(!p)return;
   const unit=p.unit||'UN';
@@ -3055,6 +3124,25 @@ function submitAddItemToOP(opId){
   logAction(d,'Item adicionado à OP','OP #'+op.opNum+' — '+esc(p.name)+' x'+fnum(qty));
   sdb(d);toast('Item adicionado','ok');Mclose();setTimeout(()=>viewOP(opId),50);
 }
+function aiACFilter(){
+  const inp=el('ai-inp'),drop=el('ai-drop');if(!inp||!drop)return;
+  const q=inp.value.toLowerCase().trim();
+  inp.dataset.pid=''; // Limpa seleção ao digitar
+  let matchCount=0;
+  drop.querySelectorAll('.ac-opt:not([data-new])').forEach(opt=>{
+    const show=!q||opt.textContent.toLowerCase().includes(q);
+    opt.style.display=show?'':'none';
+    if(show)matchCount++;
+  });
+  const newBtn=el('ai-new');
+  if(newBtn)newBtn.style.display=q&&matchCount===0?'':'none';
+  if(matchCount>0||(q&&newBtn&&matchCount===0)){
+    const rect=inp.getBoundingClientRect();
+    Object.assign(drop.style,{position:'fixed',left:rect.left+'px',top:(rect.bottom+2)+'px',width:rect.width+'px',zIndex:'9999',right:'auto'});
+    drop.style.display='block';
+  }else{drop.style.display='none';}
+}
+function aiACClose(){const d=el('ai-drop');if(d)d.style.display='none';}
 function saveOPLogistica(opId){
   const dt=(el('vop-dt')||{}).value||'';
   const tr=(el('vop-tr')||{}).value||'';
