@@ -534,7 +534,7 @@ tbody tr:last-child td{border-bottom:none}
       <input id="g-search" class="sinput" placeholder="🔍 Buscar pedido..." style="width:200px;padding:6px 12px;font-size:13px"
         oninput="gSearchFilter()" onkeydown="if(event.key==='Escape')closeGSearch()"
         onfocus="gSearchFilter()" onblur="setTimeout(closeGSearch,200)">
-      <div id="g-sdrop" style="display:none;position:absolute;right:0;top:calc(100% + 4px);min-width:320px;width:480px;max-width:min(480px,calc(100vw - 20px));background:var(--bg-card2);border:1px solid var(--border2);border-radius:var(--r);box-shadow:var(--sh);z-index:600;max-height:400px;overflow-y:auto"></div>
+      <div id="g-sdrop" style="display:none;position:fixed;background:var(--bg-card2);border:1px solid var(--border2);border-radius:var(--r);box-shadow:var(--sh);z-index:600;max-height:400px;overflow-y:auto"></div>
     </div>
     <div class="header-right">
       <span id="sync-badge" style="display:none;font-size:11px;padding:3px 10px;border-radius:10px;background:rgba(34,197,94,.15);color:#22c55e;border:1px solid rgba(34,197,94,.3)">● Online</span>
@@ -581,8 +581,11 @@ const APP_VERSION='1.3.5';
 const APP_CHANGELOG={
   '1.3.5':[
     'Campo de produto com busca automática ao adicionar item em OP',
+    'Edição de quantidade dos itens diretamente na OP',
     'Bug corrigido: botão Atualizar no dashboard não limpa mais os dados',
     'Bug corrigido: controle de estoque exibe quantidades corretamente',
+    'Bug corrigido: dropdown de busca de pedido sobrepunha o conteúdo da tela',
+    'Proteção contra deleção acidental de dados no banco (guard de mass-delete)',
   ],
   '1.3.4':[
     'Sino de notificações: alerta quando produção libera itens (para expedição)',
@@ -746,6 +749,11 @@ async function _saveStockToTable(d){
     if(JSON.stringify(data)!==_lastSavedStockStr[id])rows.push({id,data,updated_at:new Date().toISOString()});
   });
   const toDelete=Object.keys(_lastSavedStockStr).filter(id=>!currentKeys.has(id));
+  // Guard: nunca deletar tudo se o local está vazio mas o servidor tinha dados
+  if(currentKeys.size===0&&toDelete.length>0){
+    console.warn('[TGL] _saveStockToTable: bloqueado mass-delete (local vazio, '+toDelete.length+' entradas no servidor)');
+    return;
+  }
   const ps=[];
   if(rows.length){
     ps.push(_sf('/rest/v1/'+_STOCK_TABLE,{
@@ -784,6 +792,11 @@ async function _saveMovementsToTable(d){
     ...(d.packagingMovements||[]).filter(m=>!_lastSavedMovIds.has(m.id)).map(m=>({id:m.id,data:m,category:'pack',updated_at:new Date().toISOString()}))
   ];
   const toDelete=[..._lastSavedMovIds].filter(id=>!allCurrentIds.has(id));
+  // Guard: nunca deletar tudo se o local está vazio mas o servidor tinha dados
+  if(allCurrentIds.size===0&&toDelete.length>0){
+    console.warn('[TGL] _saveMovementsToTable: bloqueado mass-delete (local vazio, '+toDelete.length+' entradas no servidor)');
+    return;
+  }
   const ps=[];
   if(toInsert.length){
     ps.push(_sf('/rest/v1/'+_MOV_TABLE,{
@@ -818,6 +831,11 @@ async function _saveEntityTable(table,items,lastSavedRef){
   const currentIds=new Set((items||[]).map(x=>x.id));
   const changed=(items||[]).filter(x=>JSON.stringify(x)!==lastSavedRef[x.id]);
   const toDelete=Object.keys(lastSavedRef).filter(id=>!currentIds.has(id));
+  // Guard: nunca deletar tudo se o local está vazio mas o servidor tinha dados
+  if(currentIds.size===0&&toDelete.length>0){
+    console.warn('[TGL] _saveEntityTable('+table+'): bloqueado mass-delete (local vazio, '+toDelete.length+' entradas no servidor)');
+    return;
+  }
   const ps=[];
   if(changed.length){
     const rows=changed.map(x=>({id:x.id,data:x,updated_at:new Date().toISOString()}));
@@ -2994,13 +3012,18 @@ function viewOP(id){
     if(itemDispStr==='—'&&op.finalAt&&(i.partiallyDispatched||_itemFullyDisp(i)))itemDispStr=new Date(op.finalAt).toLocaleDateString('pt-BR')+' '+new Date(op.finalAt).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
     const qDisp=i.qtyDispatched||0;
     const qDispStr=qDisp>0?'<span style="font-size:11px;color:var(--warn)">'+fnum(qDisp)+'/'+fnum(i.qty)+'</span>':fnum(i.qty);
-    const removeBtn=isActiveOP?'<td><button class="btn btn-danger btn-sm" style="font-size:11px;padding:3px 7px" onclick="removeOPItem(\''+op.id+'\','+idx+')" title="Remover item">🗑️</button></td>':'<td></td>';
+    const actionBtns=isActiveOP
+      ?'<td style="white-space:nowrap">'+
+        '<button class="btn btn-ghost btn-sm" style="font-size:11px;padding:3px 7px;margin-right:4px" onclick="openEditOPItemQty(\''+op.id+'\','+idx+')" title="Editar quantidade">✏️</button>'+
+        '<button class="btn btn-danger btn-sm" style="font-size:11px;padding:3px 7px" onclick="removeOPItem(\''+op.id+'\','+idx+')" title="Remover item">🗑️</button>'+
+        '</td>'
+      :'<td></td>';
     return'<tr><td>'+esc(p?p.name:i.productName)+'</td><td><span class="sku">'+esc(i.sku||'—')+'</span></td>'+
       '<td>'+qDispStr+'</td>'+
       '<td><span class="bs '+stclass(i.status)+'">'+stlabel(i.status)+'</span></td>'+
       '<td style="font-size:12px">'+esc(i.obs||'—')+'</td>'+
       '<td style="font-size:12px">'+(fl||'—')+'</td>'+
-      '<td style="font-size:11px;color:var(--muted);white-space:nowrap">'+itemDispStr+'</td>'+removeBtn+'</tr>';
+      '<td style="font-size:11px;color:var(--muted);white-space:nowrap">'+itemDispStr+'</td>'+actionBtns+'</tr>';
   }).join('');
   // Edit block — only shown for active (non-finalized) OPs
   const editBlock=isActiveOP
@@ -3051,6 +3074,35 @@ function removeOPItem(opId,idx){
   op.items.splice(idx,1);
   logAction(d,'Item removido da OP','OP #'+op.opNum+' — '+esc(item.productName||item.sku));
   sdb(d);toast('Item removido','ok');Mclose();setTimeout(()=>viewOP(opId),50);
+}
+function openEditOPItemQty(opId,idx){
+  const d=gdb(),op=d.ops.find(o=>o.id===opId);if(!op)return;
+  const item=op.items[idx];
+  const unit=item.unit||'PC';
+  const qDisp=item.qtyDispatched||0;
+  const minNote=qDisp>0?'<div class="alert alert-warn" style="margin-top:8px">⚠️ Já foram despachadas '+fnum(qDisp)+' unidades. A nova quantidade deve ser maior ou igual a esse valor.</div>':'';
+  Mopen('✏️ Editar Quantidade',
+    '<div class="alert alert-info"><strong>'+esc(item.productName||item.sku||'—')+'</strong></div>'+
+    '<div class="fg" style="margin-top:12px"><label>Nova quantidade ('+unit+')</label>'+
+    '<input type="number" id="eq-qty" min="'+(qDisp||1)+'" step="1" value="'+Math.round(item.qty||0)+'" style="width:100%"></div>'+
+    minNote,
+    '<button class="btn btn-ghost" onclick="Mclose();setTimeout(()=>viewOP(\''+opId+'\'),50)">Cancelar</button>'+
+    '<button class="btn btn-green" onclick="submitEditOPItemQty(\''+opId+'\','+idx+')">💾 Salvar</button>'
+  );
+  setTimeout(()=>{const inp=el('eq-qty');if(inp){inp.focus();inp.select();}},60);
+}
+function submitEditOPItemQty(opId,idx){
+  const d=gdb(),op=d.ops.find(o=>o.id===opId);if(!op)return;
+  const item=op.items[idx];
+  const unit=item.unit||'PC';
+  const newQty=_parseQty(v('eq-qty'),unit);
+  const qDisp=item.qtyDispatched||0;
+  if(isNaN(newQty)||newQty<=0){toast('Quantidade inválida','err');return;}
+  if(newQty<qDisp){toast('Quantidade não pode ser menor que o já despachado ('+fnum(qDisp)+')','err');return;}
+  const oldQty=item.qty;
+  item.qty=newQty;
+  logAction(d,'Qtd alterada na OP','OP #'+op.opNum+' — '+esc(item.productName||item.sku)+': '+oldQty+' → '+newQty);
+  sdb(d);toast('Quantidade atualizada','ok');Mclose();setTimeout(()=>viewOP(opId),50);
 }
 function openAddItemToOP(opId){
   const d=gdb();
@@ -3326,9 +3378,10 @@ function renderEstoque(){
   _opTipData={};
   d.ops.filter(o=>o.status==='ativo'&&!o.archived).forEach(op=>{
     op.items.forEach(i=>{
-      demands[i.pid]=(demands[i.pid]||0)+i.qty;
+      const iqty=Math.round(i.qty||0);
+      demands[i.pid]=(demands[i.pid]||0)+iqty;
       if(!_opTipData[i.pid])_opTipData[i.pid]=[];
-      _opTipData[i.pid].push({num:op.opNum||op.id,client:(op.clientName||'—'),qty:i.qty});
+      _opTipData[i.pid].push({num:op.opNum||op.id,client:(op.clientName||'—'),qty:iqty});
     });
   });
   const qSaved=(el('srch-est')?el('srch-est').value:'');
@@ -4309,7 +4362,8 @@ async function approveUser(id){
 
 // ─── GLOBAL SEARCH ───
 function gSearchFilter(){
-  const q=(document.getElementById('g-search')||{value:''}).value.trim().toLowerCase();
+  const inp=document.getElementById('g-search');
+  const q=(inp||{value:''}).value.trim().toLowerCase();
   const drop=document.getElementById('g-sdrop');
   if(!drop)return;
   if(!q){drop.style.display='none';return;}
@@ -4321,19 +4375,33 @@ function gSearchFilter(){
   ).slice(0,8);
   if(!results.length){
     drop.innerHTML='<div style="padding:12px 16px;font-size:13px;color:var(--muted)">Nenhum resultado encontrado</div>';
-    drop.style.display='block';return;
+  }else{
+    drop.innerHTML=results.map(op=>{
+      const stcls=op.archived?'bs-arquivado':op.status==='finalizado'?'bs-finalizado':'bs-ativo';
+      const stlb=op.archived?'Arquivada':op.status==='finalizado'?'Finalizada':'Ativa';
+      return'<div style="display:flex;align-items:center;gap:8px;padding:9px 14px;cursor:pointer;border-bottom:1px solid var(--border2)" '+
+        'onmousedown="closeGSearch();viewOP(\''+op.id+'\')" '+
+        'onmouseover="this.style.background=\'var(--hover)\'" onmouseout="this.style.background=\'\'">'+
+        '<span style="font-size:14px;font-weight:700;min-width:60px">#'+esc(op.opNum)+'</span>'+
+        '<span style="font-size:13px;color:var(--sub);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(op.clientName)+'</span>'+
+        '<span class="bs '+stcls+'" style="font-size:11px;flex-shrink:0">'+stlb+'</span>'+
+      '</div>';
+    }).join('');
   }
-  drop.innerHTML=results.map(op=>{
-    const stcls=op.archived?'bs-arquivado':op.status==='finalizado'?'bs-finalizado':'bs-ativo';
-    const stlb=op.archived?'Arquivada':op.status==='finalizado'?'Finalizada':'Ativa';
-    return'<div style="display:flex;align-items:center;gap:8px;padding:9px 14px;cursor:pointer;border-bottom:1px solid var(--border2)" '+
-      'onmousedown="closeGSearch();viewOP(\''+op.id+'\')" '+
-      'onmouseover="this.style.background=\'var(--hover)\'" onmouseout="this.style.background=\'\'">'+
-      '<span style="font-size:14px;font-weight:700;min-width:60px">#'+esc(op.opNum)+'</span>'+
-      '<span style="font-size:13px;color:var(--sub);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(op.clientName)+'</span>'+
-      '<span class="bs '+stcls+'" style="font-size:11px;flex-shrink:0">'+stlb+'</span>'+
-    '</div>';
-  }).join('');
+  // Posiciona o dropdown abaixo do input usando fixed (evita sobreposição de layout)
+  if(inp){
+    const rect=inp.getBoundingClientRect();
+    const dropW=Math.min(480,window.innerWidth-20);
+    // Alinha pela direita do input, sem sair da tela pela esquerda
+    let left=rect.right-dropW;
+    if(left<10)left=10;
+    Object.assign(drop.style,{
+      top:(rect.bottom+4)+'px',
+      left:left+'px',
+      width:dropW+'px',
+      right:'auto'
+    });
+  }
   drop.style.display='block';
 }
 function closeGSearch(){
