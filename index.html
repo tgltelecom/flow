@@ -584,6 +584,7 @@ const APP_CHANGELOG={
     'Edição de quantidade dos itens diretamente na OP',
     'Bug corrigido: botão Atualizar no dashboard não limpa mais os dados',
     'Bug corrigido: controle de estoque exibe quantidades corretamente',
+    'Bug corrigido: OP finalizada por outro usuário podia ser revertida para ativa',
     'Bug corrigido: dropdown de busca de pedido sobrepunha o conteúdo da tela',
     'Proteção contra deleção acidental de dados no banco (guard de mass-delete)',
   ],
@@ -4445,9 +4446,17 @@ function closeGSearch(){
       const mergedOps=(_db.ops||[]).map(localOp=>{
         const serverOp=serverOpsById[localOp.id];
         if(!serverOp)return localOp;
+        // "Finalizado" no servidor SEMPRE vence — não pode ser revertido por estado local
+        if(serverOp.status==='finalizado'&&localOp.status!=='finalizado'){
+          _lastSavedOpsStr[localOp.id]=JSON.stringify(serverOp);
+          return serverOp;
+        }
+        // Mudanças locais não salvas têm prioridade sobre o servidor
         if(_lastSavedOpsStr[localOp.id]&&JSON.stringify(localOp)!==_lastSavedOpsStr[localOp.id])return localOp;
         const ndOp={...serverOp};
         _mergeItemStatuses({ops:[localOp]},{ops:[ndOp]});
+        // Atualiza referência local para evitar que o heartbeat re-salve o estado antigo
+        _lastSavedOpsStr[localOp.id]=JSON.stringify(ndOp);
         return ndOp;
       });
       serverOpsRows.forEach(r=>{if(!mergedOps.find(o=>o.id===r.id))mergedOps.push(r.data);});
