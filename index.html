@@ -577,8 +577,14 @@ const SUPA_URL='https://bobzfvyqqxapvoabtejl.supabase.co';
 const SUPA_KEY='sb_publishable_yyFwUYtK5D24yeAsd6jkjQ_UuizdNAA';
 const _AUDIT_KEY='tgl_v3_audit'; // linha separada no banco para o log de auditoria
 let _auditLog=[];                     // mantido em memória; nunca entra no payload principal
-const APP_VERSION='1.3.5';
+const APP_VERSION='1.3.6';
 const APP_CHANGELOG={
+  '1.3.6':[
+    'Bug corrigido: ao dar baixa em pedido de expedição, o estoque agora baixa corretamente',
+    'Bug corrigido: coluna "Reservado" no estoque exibe a quantidade real pendente (não total)',
+    'Bug corrigido: inventário inicial ao criar OP agora aparece no log de auditoria',
+    'Bug corrigido: log de auditoria com múltiplos usuários simultâneos não perde mais entradas',
+  ],
   '1.3.5':[
     'Campo de produto com busca automática ao adicionar item em OP',
     'Edição de quantidade dos itens diretamente na OP',
@@ -978,10 +984,23 @@ async function _loadAuditLog(){
 }
 async function _saveAuditLog(){
   try{
+    // Fetch estado atual do servidor antes de salvar para não sobrescrever
+    // entradas de outras sessões concorrentes (race condition mitigation)
+    let serverEntries=[];
+    try{
+      const r=await _sf('/rest/v1/app_data?key=eq.'+_AUDIT_KEY+'&select=data');
+      if(r.ok){const rows=await r.json();if(rows&&rows.length>0)serverEntries=rows[0].data.entries||[];}
+    }catch(e){}
+    // União por ID: local tem prioridade, servidor preenche o que falta
+    const localIds=new Set(_auditLog.map(e=>e.id));
+    const merged=[..._auditLog,...serverEntries.filter(e=>!localIds.has(e.id))];
+    const cutoff=Date.now()-180*24*60*60*1000;
+    const deduped=merged.filter(e=>e.at>=cutoff).sort((a,b)=>b.at-a.at);
+    _auditLog=deduped; // atualiza cache local também
     await _sf('/rest/v1/app_data',{
       method:'POST',
       headers:{Prefer:'resolution=merge-duplicates'},
-      body:JSON.stringify({key:_AUDIT_KEY,data:{entries:_auditLog},updated_at:new Date().toISOString()})
+      body:JSON.stringify({key:_AUDIT_KEY,data:{entries:deduped},updated_at:new Date().toISOString()})
     });
   }catch(e){console.warn('[TGL] audit save failed:',e);}
 }
@@ -1659,7 +1678,7 @@ function getStock(pid,needed){
   const st=d.stock[pid];
   if(!st)return{cls:'sem sem-y',label:'Sem lançamento'};
   const committed=d.ops.filter(o=>o.status!=='finalizado'&&!o.archived)
-    .reduce((a,op)=>{const it=op.items.find(i=>i.pid===pid);return a+(it?it.qty:0);},0);
+    .reduce((a,op)=>{const it=op.items.find(i=>i.pid===pid);return a+(it?_itemQtyLeft(it):0);},0);
   const avail=st.qty-committed;
   if(avail>=needed)return{cls:'sem sem-g',label:'Atende ('+avail+' disp.)'};
   return{cls:'sem sem-r',label:'Insuficiente ('+avail+' disp.)'};
@@ -1810,7 +1829,13 @@ async function refreshDashboard(){
             else if(id.startsWith('RM:'))nrm[id.slice(3)]=data;
             else if(id.startsWith('PK:')){npk[id.slice(3)]=data&&typeof data==='object'&&'qty' in data?data.qty:data;}
           });
-          freshStock=ns;freshRm=nrm;freshPk=npk;
+          // Só substitui estoque local se não há save em andamento —
+          // evita que dados stale do servidor revertam um despacho que acabou de ser salvo
+          if(!_saveInProgress&&!_saveQueue&&!_failedPayload){
+            freshStock=ns;freshRm=nrm;freshPk=npk;
+            // Sincroniza baseline para que o heartbeat não re-salve os dados do servidor como alteração local
+            srows.forEach(({id,data})=>{_lastSavedStockStr[id]=JSON.stringify(data);});
+          }
         }
         _db={...idb(),...rows[0].data,
           products:_db.products||[],clients:_db.clients||[],rawMaterials:_db.rawMaterials||[],
@@ -2817,12 +2842,17 @@ function cancelInitStock(){
 function saveInitStock(){
   // Always use fresh _db — _isiDB may be stale if user took >20s filling the form
   const d=gdb();let ok=true;
+  const logParts=[];
   document.querySelectorAll('.isi-inp').forEach(inp=>{
     const qty=parseInt(inp.value);
     if(isNaN(qty)||qty<0){ok=false;return;}
-    d.stock[inp.dataset.pid]={qty,at:Date.now()};
+    const pid=inp.dataset.pid;
+    d.stock[pid]={qty,at:Date.now()};
+    const p=(d.products||[]).find(x=>x.id===pid);
+    logParts.push((p?p.name:pid)+': '+qty+' un');
   });
   if(!ok){toast('Informe quantidades válidas','err');return;}
+  if(logParts.length>0) logAction(d,'Inventário inicial registrado',logParts.join(' | '));
   sdb(d);Mclose();toast('Estoque registrado!','ok');
   if(window._isiCB)window._isiCB();
 }
@@ -3379,7 +3409,9 @@ function renderEstoque(){
   _opTipData={};
   d.ops.filter(o=>o.status==='ativo'&&!o.archived).forEach(op=>{
     op.items.forEach(i=>{
-      const iqty=Math.round(i.qty||0);
+      // Usa qty restante (não total) — despachos parciais já baixaram do estoque
+      const iqty=Math.round(_itemQtyLeft(i)||0);
+      if(iqty<=0)return;
       demands[i.pid]=(demands[i.pid]||0)+iqty;
       if(!_opTipData[i.pid])_opTipData[i.pid]=[];
       _opTipData[i.pid].push({num:op.opNum||op.id,client:(op.clientName||'—'),qty:iqty});
@@ -4118,7 +4150,11 @@ function confirmDispatch(id){
     const p=d.products.find(x=>x.id===it.pid);
     if(p&&p.isStock&&d.stock[it.pid]){
       const remaining=_itemQtyLeft(it);
-      if(remaining>0)d.stock[it.pid].qty=Math.max(0,d.stock[it.pid].qty-remaining);
+      if(remaining>0){
+        // Atualiza qty E at para garantir que _saveStockToTable detecte a mudança
+        const newQty=Math.max(0,d.stock[it.pid].qty-remaining);
+        d.stock[it.pid]={...d.stock[it.pid],qty:newQty,at:Date.now()};
+      }
     }
   });
   sdb(d);
@@ -4195,7 +4231,10 @@ function confirmParcial(id){
     item.stageLog.push({status:'despachado_parcial',at:Date.now(),qty});
     // Deduct stock for revenda items
     const p=d.products.find(x=>x.id===item.pid);
-    if(p&&p.isStock&&d.stock[item.pid])d.stock[item.pid].qty=Math.max(0,d.stock[item.pid].qty-qty);
+    if(p&&p.isStock&&d.stock[item.pid]){
+      const newQty=Math.max(0,d.stock[item.pid].qty-qty);
+      d.stock[item.pid]={...d.stock[item.pid],qty:newQty,at:Date.now()};
+    }
   });
   const totalQty=selectedItems.reduce((s,x)=>s+x.qty,0);
   logAction(d,'Despacho parcial',d.ops[oi].opNum+' — '+selectedItems.length+' item(s) · '+totalQty+' un. · NF: '+(nfeNumber||'—'));
