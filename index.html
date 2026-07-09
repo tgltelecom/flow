@@ -538,6 +538,7 @@ tbody tr:last-child td{border-bottom:none}
     </div>
     <div class="header-right">
       <span id="sync-badge" style="display:none;font-size:11px;padding:3px 10px;border-radius:10px;background:rgba(34,197,94,.15);color:#22c55e;border:1px solid rgba(34,197,94,.3)">● Online</span>
+      <button id="bug-btn" onclick="openBugReport()" title="Reportar bug" style="display:none;background:transparent;border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:14px;cursor:pointer;color:var(--muted)" onmouseover="this.style.borderColor='var(--danger)';this.style.color='var(--danger)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">🐛</button>
       <div class="bell-wrap" id="bell-wrap" style="display:none">
         <button class="bell-btn" id="bell-btn" onclick="_toggleBell()" title="Notificações">🔔</button>
         <span class="bell-badge" id="bell-badge" style="display:none"></span>
@@ -575,10 +576,26 @@ if(typeof pdfjsLib!=='undefined') pdfjsLib.GlobalWorkerOptions.workerSrc='https:
 // ─── DB / SUPABASE ───
 const SUPA_URL='https://bobzfvyqqxapvoabtejl.supabase.co';
 const SUPA_KEY='sb_publishable_yyFwUYtK5D24yeAsd6jkjQ_UuizdNAA';
-const _AUDIT_KEY='tgl_v3_audit'; // linha separada no banco para o log de auditoria
+const _AUDIT_KEY='tgl_v3_audit'; // linha separada no banco para o log de auditoria (legado)
+const _AUDIT_TABLE='tgl_audit_log'; // tabela dedicada — INSERT atômico por evento
 let _auditLog=[];                     // mantido em memória; nunca entra no payload principal
-const APP_VERSION='1.3.6';
+const APP_VERSION='1.3.8';
 const APP_CHANGELOG={
+  '1.3.8':[
+    'Solução definitiva: baixa de estoque agora usa RPC atômico no servidor (sem race conditions)',
+    'Removido DELETE automático de estoque — itens manuais nunca mais somem por limpeza local',
+    'Bug corrigido: OP finalizada não volta mais para "em aberto" após heartbeat',
+    'Bug corrigido: despachos parciais não são perdidos por fetch antigo do servidor',
+    'Novo: campo Transportadora obrigatório no formulário de criação de OP',
+    'Novo: botão 🐛 Reportar Bug — envia notificação direta para o admin no sino',
+    'Novo: logout automático por 30 min de inatividade',
+    'Novo: alerta de estoque crítico de MP/Embalagem no sino de notificações do Comprador',
+    'Novo: lançamento manual de estoque com opção de Entrada (+) e Saída (-)',
+    'Audit log gravado diretamente em tabela dedicada via INSERT atômico',
+  ],
+  '1.3.7':[
+    'Bug crítico corrigido: quantidades inseridas manualmente no banco não são mais apagadas pelo sistema',
+  ],
   '1.3.6':[
     'Bug corrigido: ao dar baixa em pedido de expedição, o estoque agora baixa corretamente',
     'Bug corrigido: coluna "Reservado" no estoque exibe a quantidade real pendente (não total)',
@@ -755,27 +772,26 @@ async function _saveStockToTable(d){
     const data={qty:val};
     if(JSON.stringify(data)!==_lastSavedStockStr[id])rows.push({id,data,updated_at:new Date().toISOString()});
   });
-  const toDelete=Object.keys(_lastSavedStockStr).filter(id=>!currentKeys.has(id));
-  // Guard: nunca deletar tudo se o local está vazio mas o servidor tinha dados
-  if(currentKeys.size===0&&toDelete.length>0){
-    console.warn('[TGL] _saveStockToTable: bloqueado mass-delete (local vazio, '+toDelete.length+' entradas no servidor)');
-    return;
-  }
-  const ps=[];
-  if(rows.length){
-    ps.push(_sf('/rest/v1/'+_STOCK_TABLE,{
-      method:'POST',headers:{Prefer:'resolution=merge-duplicates'},body:JSON.stringify(rows)
-    }).then(r=>{
-      if(!r.ok)throw new Error('[TGL] stock upsert HTTP '+r.status);
-      rows.forEach(row=>{_lastSavedStockStr[row.id]=JSON.stringify(row.data);});
-    }));
-  }
-  if(toDelete.length){
-    const idsParam=toDelete.map(id=>'"'+id.replace(/"/g,'\\"')+'"').join(',');
-    ps.push(_sf('/rest/v1/'+_STOCK_TABLE+'?id=in.('+idsParam+')',{method:'DELETE'})
-      .then(r=>{if(r.ok)toDelete.forEach(id=>delete _lastSavedStockStr[id]);}));
-  }
-  if(ps.length)await Promise.all(ps);
+  // Nunca deleta entradas do servidor — apenas upsert de deltas
+  // (Deletar causava zeragem de itens inseridos manualmente no banco — v1.3.8)
+  if(!rows.length)return;
+  await _sf('/rest/v1/'+_STOCK_TABLE,{
+    method:'POST',headers:{Prefer:'resolution=merge-duplicates'},body:JSON.stringify(rows)
+  }).then(r=>{
+    if(!r.ok)throw new Error('[TGL] stock upsert HTTP '+r.status);
+    rows.forEach(row=>{_lastSavedStockStr[row.id]=JSON.stringify(row.data);});
+  });
+}
+
+// ── RPC: baixa atômica de estoque ────────────────────────────────────────────
+// Executa no servidor com FOR UPDATE — sem race condition, sem leitura local obsoleta
+async function _rpcDeductStock(stockId,qty){
+  const r=await _sf('/rest/v1/rpc/deduct_stock',{
+    method:'POST',
+    body:JSON.stringify({p_stock_id:stockId,p_qty:qty,p_at:Date.now()})
+  });
+  if(!r.ok){const t=await r.text();throw new Error('[TGL] deduct_stock RPC '+r.status+': '+t);}
+  return r.json();
 }
 
 // ── MOVEMENTS TABLE ──────────────────────────────────────────────────────────
@@ -967,18 +983,18 @@ async function loadDB(){
 // e salvo de forma independente a cada logAction.
 async function _loadAuditLog(){
   try{
-    const r=await _sf('/rest/v1/app_data?key=eq.'+_AUDIT_KEY+'&select=data');
+    // v1.3.8: carrega da tabela dedicada (INSERT atômico por evento)
+    const r=await _sf('/rest/v1/'+_AUDIT_TABLE+'?select=*&order=at.desc&limit=500');
     if(!r.ok)return;
     const rows=await r.json();
     if(rows&&rows.length>0){
-      _auditLog=rows[0].data.entries||[];
+      _auditLog=rows;
     }else{
-      // Migração única: se o payload principal ainda tem entradas antigas, migra
-      const legacy=(_db&&_db.auditLog)||[];
-      if(legacy.length>0){
-        _auditLog=legacy;
-        _saveAuditLog(); // persiste na nova linha
-      }
+      // Fallback: migra do blob legado (tgl_v3_audit) na primeira vez
+      try{
+        const lr=await _sf('/rest/v1/app_data?key=eq.'+_AUDIT_KEY+'&select=data');
+        if(lr.ok){const lrows=await lr.json();if(lrows&&lrows.length>0)_auditLog=lrows[0].data.entries||[];}
+      }catch(e){}
     }
   }catch(e){console.warn('[TGL] audit load failed:',e);}
 }
@@ -1170,11 +1186,16 @@ function idb(){return{users:[{id:'u1',name:'Administrador',email:'admin@tgltelec
 function uid(){return '_'+Math.random().toString(36).substr(2,9);}
 function logAction(d,action,details){
   if(!S)return;
-  // Grava em _auditLog (linha separada) — d não é modificado, payload principal não infla
-  _auditLog.unshift({id:uid(),at:Date.now(),uid:S.id,uname:S.name,action,details:details||''});
+  const entry={id:uid(),at:Date.now(),uid:S.id,uname:S.name,action,details:details||''};
+  _auditLog.unshift(entry);
   const cutoff=Date.now()-180*24*60*60*1000;
   _auditLog=_auditLog.filter(e=>e.at>=cutoff);
-  _saveAuditLog(); // fire-and-forget
+  // INSERT atômico na tabela dedicada — sem race condition, sem merge de blob
+  _sf('/rest/v1/'+_AUDIT_TABLE,{
+    method:'POST',
+    headers:{Prefer:'resolution=ignore-duplicates'},
+    body:JSON.stringify(entry)
+  }).catch(e=>console.warn('[TGL] audit insert failed:',e));
 }
 
 async function hashPw(pw){
@@ -1357,18 +1378,54 @@ function _getMyNotifs(){
   const now=Date.now();
   const myRoles=_roles(S)||[];
   return(d.notifications||[])
-    .filter(n=>n.targetRoles&&n.targetRoles.some(r=>myRoles.includes(r))&&(now-n.createdAt)<NOTIF_TTL)
+    .filter(n=>{
+      const ttl=n.ttl||NOTIF_TTL; // respeita TTL personalizado (ex: bugs têm 7 dias)
+      return n.targetRoles&&n.targetRoles.some(r=>myRoles.includes(r))&&(now-n.createdAt)<ttl;
+    })
     .sort((a,b)=>b.createdAt-a.createdAt);
 }
 
 function renderBell(){
   const wrap=el('bell-wrap');const badge=el('bell-badge');
   if(!wrap||!S)return;
+  // Mostrar botão de bug report para todos os usuários logados
+  const bugBtn=el('bug-btn');if(bugBtn)bugBtn.style.display='inline-block';
   const notifs=_getMyNotifs();
   if(!notifs.length){badge.style.display='none';return;}
   const unread=notifs.filter(n=>!n.readBy||!n.readBy[S.id]);
   if(unread.length>0){badge.textContent=unread.length>99?'99+':String(unread.length);badge.style.display='inline-block';}
   else{badge.style.display='none';}
+}
+
+// ─── BUG REPORT ──────────────────────────────────────────────────────────────
+function openBugReport(){
+  if(!S){toast('Faça login para reportar um bug','err');return;}
+  Mopen('🐛 Reportar Bug',
+    '<div class="alert alert-info" style="font-size:13px;margin-bottom:12px">Descreva o problema com o máximo de detalhes: o que você fez, o que esperava acontecer e o que aconteceu.</div>'+
+    '<div class="fg"><label>Título do Bug *</label><input type="text" id="bug-titulo" placeholder="Ex: Estoque não atualiza após despacho" style="width:100%;padding:10px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px"></div>'+
+    '<div class="fg" style="margin-top:10px"><label>Descrição *</label>'+
+    '<textarea id="bug-desc" style="width:100%;height:100px;padding:10px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;resize:vertical" placeholder="Descreva o que aconteceu, quando, em qual tela..."></textarea></div>',
+    '<button class="btn btn-ghost" onclick="Mclose()">Cancelar</button>'+
+    '<button class="btn btn-danger" onclick="submitBugReport()">🐛 Enviar Bug</button>'
+  );
+}
+function submitBugReport(){
+  const titulo=(el('bug-titulo')||{}).value&&el('bug-titulo').value.trim();
+  const desc=(el('bug-desc')||{}).value&&el('bug-desc').value.trim();
+  if(!titulo||!desc){toast('Preencha título e descrição','err');return;}
+  const message='🐛 Bug reportado por '+esc(S.name);
+  const detail='['+esc(titulo)+']\n'+esc(desc);
+  // TTL estendido para bugs — 7 dias
+  const d=gdb();
+  if(!d.notifications)d.notifications=[];
+  d.notifications.push({
+    id:uid(),type:'bug',targetRoles:['admin'],
+    message,detail,
+    createdAt:Date.now(),readBy:{},
+    ttl:7*24*60*60*1000 // sobrescreve o TTL padrão na leitura
+  });
+  logAction(d,'Bug reportado',titulo);
+  sdb(d);Mclose();toast('Bug reportado! O admin receberá a notificação.','ok');
 }
 
 function _bellTimeAgo(ts){
@@ -1403,9 +1460,11 @@ function _renderNotifDrop(){
   if(!notifs.length){drop.innerHTML='<div class="notif-empty">Sem notificações</div>';return;}
   drop.innerHTML=notifs.map(n=>{
     const isUnread=!n.readBy||!n.readBy[S.id];
-    return'<div class="notif-item'+(isUnread?' unread':'')+'" onclick="_openNotif(\''+n.id+'\')">'+
+    const isBug=n.type==='bug';
+    const borderLeft=isBug?'border-left:3px solid var(--danger);padding-left:11px;':'';
+    return'<div class="notif-item'+(isUnread?' unread':'')+'" style="'+borderLeft+'" onclick="_openNotif(\''+n.id+'\')">'+
       '<div style="font-size:12px;font-weight:600;margin-bottom:3px;line-height:1.4">'+esc(n.message)+'</div>'+
-      '<div style="font-size:11px;color:var(--muted)">'+_bellTimeAgo(n.createdAt)+(isUnread?' · <strong style=\"color:var(--green)\">Nova</strong>':'')+'</div>'+
+      '<div style="font-size:11px;color:var(--muted)">'+_bellTimeAgo(n.createdAt)+(isUnread?' · <strong style=\"color:'+(isBug?'var(--danger)':'var(--green)')+'\">Nova</strong>':'')+'</div>'+
     '</div>';
   }).join('');
 }
@@ -1458,6 +1517,21 @@ function _notifLiberado(d,op,item,sec){
     '\n\nItem liberado:\n• '+prodName+' ('+qty+' '+unit+')'
   );
 }
+
+// ─── INATIVIDADE — logout automático após 30 min ─────────────────────────────
+let _lastActivityAt=Date.now();
+const _INACTIVITY_MS=30*60*1000; // 30 minutos
+function _resetActivity(){_lastActivityAt=Date.now();}
+['mousemove','keydown','click','touchstart'].forEach(ev=>
+  document.addEventListener(ev,_resetActivity,{passive:true})
+);
+setInterval(()=>{
+  if(!S)return; // não logado
+  if(Date.now()-_lastActivityAt>_INACTIVITY_MS){
+    toast('Sessão encerrada por inatividade (30 min).','info');
+    doLogout();
+  }
+},60000); // verifica a cada 1 min
 
 // ─── FORCE LOGOUT ─────────────────────────────────────────────────────────────
 function forceLogoutUser(uid){
@@ -3271,6 +3345,7 @@ function openManualOP(){
   Mopen('✏️ Inserir OP Manualmente',
     '<div class="fgrid"><div class="fg"><label>Nº do Pedido *</label><input type="text" id="mo-num" placeholder="Ex: 8486"></div>'+
     '<div class="fg"><label>Cliente *</label><input type="text" id="mo-cli" list="mo-cli-dl" placeholder="Nome do cliente"><datalist id="mo-cli-dl">'+cliOpts+'</datalist></div></div>'+
+    '<div class="fg"><label>Transportadora *</label><input type="text" id="mo-tr" placeholder="Nome da transportadora"></div>'+
     '<div class="fg"><label>Observações</label><textarea id="mo-obs" placeholder="Observações gerais..."></textarea></div>'+
     '<div class="sdiv">Itens</div><div id="mo-items"></div>'+
     '<button class="btn btn-outline btn-sm" style="margin-top:8px" onclick="addMOItem()">+ Item</button>',
@@ -3323,8 +3398,9 @@ function moACFilter(id){
 }
 function moACClose(id){const d=el('drop-'+id);if(d)d.style.display='none';}
 function submitManualOP(){
-  const num=v('mo-num').trim(),cli=v('mo-cli').trim();
+  const num=v('mo-num').trim(),cli=v('mo-cli').trim(),tr=v('mo-tr').trim();
   if(!num||!cli){toast('Nº e cliente obrigatórios','err');return;}
+  if(!tr){toast('Transportadora obrigatória','err');return;}
   const d=gdb();
   const items=[];
   document.querySelectorAll('#mo-items .ac-wrap').forEach(wrap=>{
@@ -3350,7 +3426,7 @@ function submitManualOP(){
   });
   if(!items.length){toast('Adicione ao menos um item','err');return;}
   Mclose();
-  _draft={opNum:num,clientName:cli,coleta:'transportadora',items,obs:v('mo-obs')};
+  _draft={opNum:num,clientName:cli,transporter:tr,coleta:'coleta_sorocaba',items,obs:v('mo-obs')};
   showReview('Manual');
 }
 
@@ -3488,23 +3564,50 @@ function renderEstoque(){
 function openLancamento(pid){
   const d=gdb();
   let prodSel;
-  if(pid){const p=d.products.find(x=>x.id===pid);prodSel='<input type="hidden" id="ae-prod" value="'+pid+'"><div class="alert alert-info"><strong>'+esc(p?p.name:'')+'</strong>'+(d.stock[pid]?'<br>Estoque atual: <strong>'+fnum(d.stock[pid].qty)+'</strong> un.':'')+'</div>';}
+  if(pid){const p=d.products.find(x=>x.id===pid);prodSel='<input type="hidden" id="ae-prod" value="'+pid+'"><div class="alert alert-info"><strong>'+esc(p?p.name:'')+'</strong>'+(d.stock[pid]?'<br>Estoque atual: <strong>'+fnum(d.stock[pid].qty)+'</strong> un.':'<br><em>Sem estoque cadastrado</em>')+'</div>';}
   else{const prods2=d.products.filter(p=>p.isStock);if(!prods2.length){toast('Nenhum produto de revenda cadastrado','info');return;}prodSel='<div class="fg"><label>Produto</label><select id="ae-prod">'+prods2.map(p=>'<option value="'+p.id+'">'+esc(p.name)+'</option>').join('')+'</select></div>';}
-  Mopen('➕ Novo Lançamento de Estoque',
-    prodSel+'<div class="fg"><label>Quantidade a adicionar *</label><input type="number" id="ae-qty" min="1" placeholder="Ex: 500"></div>'+
-    '<div class="fg"><label>Motivo (opcional)</label><input type="text" id="ae-mot" placeholder="Ex: Compra de materiais"></div>',
-    '<button class="btn btn-ghost" onclick="Mclose()">Cancelar</button><button class="btn btn-green" onclick="saveLancEst()">Salvar</button>'
+  Mopen('📦 Lançamento de Estoque',
+    prodSel+
+    '<div class="fg"><label>Tipo de Lançamento *</label>'+
+    '<div class="ck-group" style="flex-direction:row;gap:16px">'+
+    '<label class="ck-row"><input type="radio" name="ae-tipo" value="entrada" checked onchange="_aeLancTipoChange()"> <span style="color:var(--green)">➕ Entrada (adicionar)</span></label>'+
+    '<label class="ck-row"><input type="radio" name="ae-tipo" value="saida" onchange="_aeLancTipoChange()"> <span style="color:var(--danger)">➖ Saída (retirar)</span></label>'+
+    '</div></div>'+
+    '<div class="fg"><label id="ae-qty-lbl">Quantidade a adicionar *</label><input type="number" id="ae-qty" min="1" placeholder="Ex: 500"></div>'+
+    '<div class="fg"><label>Motivo (opcional)</label><input type="text" id="ae-mot" placeholder="Ex: Compra NF 1234 / Perda / Ajuste"></div>',
+    '<button class="btn btn-ghost" onclick="Mclose()">Cancelar</button><button class="btn btn-green" id="ae-btn-save" onclick="saveLancEst()">Salvar Entrada</button>'
   );
+}
+function _aeLancTipoChange(){
+  const tipo=(document.querySelector('input[name="ae-tipo"]:checked')||{}).value;
+  const lbl=el('ae-qty-lbl'),btn=el('ae-btn-save');
+  if(tipo==='saida'){
+    if(lbl)lbl.textContent='Quantidade a retirar *';
+    if(btn){btn.textContent='Salvar Saída';btn.className='btn btn-danger';}
+  }else{
+    if(lbl)lbl.textContent='Quantidade a adicionar *';
+    if(btn){btn.textContent='Salvar Entrada';btn.className='btn btn-green';}
+  }
 }
 function saveLancEst(){
   const pid=v('ae-prod'),qty=parseInt(v('ae-qty'));
+  const tipo=(document.querySelector('input[name="ae-tipo"]:checked')||{}).value||'entrada';
   if(!pid){toast('Selecione um produto','err');return;}
   if(isNaN(qty)||qty<=0){toast('Quantidade deve ser > 0','err');return;}
   const d=gdb();const _lp=d.products.find(x=>x.id===pid);
   const prev=(d.stock[pid]||{}).qty||0;
-  d.stock[pid]={qty:prev+qty,at:Date.now()};
-  logAction(d,'Estoque lançado',(_lp?_lp.name:'pid:'+pid)+': +'+qty+' → total '+(prev+qty));
-  sdb(d);Mclose();toast('Lançamento: +'+qty+' un. (total: '+(prev+qty)+')','ok');renderEstoque();
+  if(tipo==='saida'){
+    if(qty>prev&&!confirm('⚠️ A retirada de '+qty+' un. é maior que o saldo atual ('+prev+' un.).\nO estoque ficará negativo. Confirmar mesmo assim?'))return;
+    const novoQty=prev-qty;
+    d.stock[pid]={qty:novoQty,at:Date.now()};
+    logAction(d,'Saída de estoque',(_lp?_lp.name:'pid:'+pid)+': -'+qty+' → total '+novoQty);
+    sdb(d);Mclose();toast('Saída: -'+qty+' un. (total: '+novoQty+')','ok');renderEstoque();
+  }else{
+    const novoQty=prev+qty;
+    d.stock[pid]={qty:novoQty,at:Date.now()};
+    logAction(d,'Estoque lançado',(_lp?_lp.name:'pid:'+pid)+': +'+qty+' → total '+novoQty);
+    sdb(d);Mclose();toast('Entrada: +'+qty+' un. (total: '+novoQty+')','ok');renderEstoque();
+  }
 }
 function openInventario(pid){
   const d=gdb();
@@ -4129,7 +4232,7 @@ function finalizarOP(id){
     '<button class="btn btn-green" onclick="confirmDispatch(\''+id+'\')">✅ Confirmar Despacho</button>'
   );
 }
-function confirmDispatch(id){
+async function confirmDispatch(id){
   const dispDate=v('disp-date');
   if(!dispDate){toast('Data de despacho obrigatória','err');return;}
   const d=gdb();const i=d.ops.findIndex(o=>o.id===id);
@@ -4145,18 +4248,31 @@ function confirmDispatch(id){
   d.ops[i].nfeNumber=nfeNumber;
   d.ops[i].nfeType=nfeType;
   logAction(d,'OP despachada','Pedido #'+d.ops[i].opNum+' — NF: '+(nfeNumber||'—')+' · '+dispDate);
-  // Deduct stock for revenda items — only remaining qty (not already deducted in partial dispatches)
+  // v1.3.8: baixa de estoque via RPC atômico (sem race condition)
+  const deductions=[];
   d.ops[i].items.forEach(it=>{
     const p=d.products.find(x=>x.id===it.pid);
     if(p&&p.isStock&&d.stock[it.pid]){
       const remaining=_itemQtyLeft(it);
-      if(remaining>0){
-        // Atualiza qty E at para garantir que _saveStockToTable detecte a mudança
-        const newQty=Math.max(0,d.stock[it.pid].qty-remaining);
-        d.stock[it.pid]={...d.stock[it.pid],qty:newQty,at:Date.now()};
-      }
+      if(remaining>0)deductions.push({stockId:'P:'+it.pid,qty:remaining,pid:it.pid});
     }
   });
+  if(deductions.length>0){
+    try{
+      const results=await Promise.all(deductions.map(dc=>_rpcDeductStock(dc.stockId,dc.qty)));
+      results.forEach((res,ri)=>{
+        if(res&&res.ok){
+          const pid=deductions[ri].pid;
+          const stockData={...(d.stock[pid]||{}),qty:res.new_qty,at:Date.now()};
+          d.stock[pid]=stockData;
+          _lastSavedStockStr['P:'+pid]=JSON.stringify(stockData);
+        }
+      });
+    }catch(e){
+      console.error('[TGL] stock RPC failed:',e);
+      toast('Aviso: erro ao baixar estoque — verifique manualmente','warn');
+    }
+  }
   sdb(d);
   toast('OP despachada e finalizada!','ok');
   showTruckAnim();
@@ -4205,7 +4321,7 @@ function dispatchParcial(id){
     'lg'
   );
 }
-function confirmParcial(id){
+async function confirmParcial(id){
   if(!el('dp-confirm').checked){toast('Marque a caixa de confirmação antes de prosseguir','err');return;}
   const selectedItems=Array.from(document.querySelectorAll('input[name="dp-item"]:checked')).map(cb=>{
     const idx=parseInt(cb.value);
@@ -4223,21 +4339,35 @@ function confirmParcial(id){
   const d=gdb();const oi=d.ops.findIndex(o=>o.id===id);if(oi<0)return;
   if(!d.ops[oi].partialDispatches)d.ops[oi].partialDispatches=[];
   d.ops[oi].partialDispatches.push({at:Date.now(),dispatchDate:dispDate,nfeNumber,nfeType,itemIndices:selectedIdx,itemQtys:selectedItems.map(x=>({idx:x.idx,qty:x.qty}))});
+  // v1.3.8: qtyDispatched e stageLog atualizados localmente; estoque via RPC atômico
+  const deductions=[];
   selectedItems.forEach(({idx,qty})=>{
     const item=d.ops[oi].items[idx];
     item.qtyDispatched=(item.qtyDispatched||0)+qty;
     item.partiallyDispatched=true;
     if(!item.stageLog)item.stageLog=[];
     item.stageLog.push({status:'despachado_parcial',at:Date.now(),qty});
-    // Deduct stock for revenda items
     const p=d.products.find(x=>x.id===item.pid);
-    if(p&&p.isStock&&d.stock[item.pid]){
-      const newQty=Math.max(0,d.stock[item.pid].qty-qty);
-      d.stock[item.pid]={...d.stock[item.pid],qty:newQty,at:Date.now()};
-    }
+    if(p&&p.isStock&&d.stock[item.pid])deductions.push({stockId:'P:'+item.pid,qty,pid:item.pid});
   });
   const totalQty=selectedItems.reduce((s,x)=>s+x.qty,0);
   logAction(d,'Despacho parcial',d.ops[oi].opNum+' — '+selectedItems.length+' item(s) · '+totalQty+' un. · NF: '+(nfeNumber||'—'));
+  if(deductions.length>0){
+    try{
+      const results=await Promise.all(deductions.map(dc=>_rpcDeductStock(dc.stockId,dc.qty)));
+      results.forEach((res,ri)=>{
+        if(res&&res.ok){
+          const pid=deductions[ri].pid;
+          const stockData={...(d.stock[pid]||{}),qty:res.new_qty,at:Date.now()};
+          d.stock[pid]=stockData;
+          _lastSavedStockStr['P:'+pid]=JSON.stringify(stockData);
+        }
+      });
+    }catch(e){
+      console.error('[TGL] stock RPC failed:',e);
+      toast('Aviso: erro ao baixar estoque — verifique manualmente','warn');
+    }
+  }
   sdb(d);
   toast('Despacho parcial: '+selectedItems.length+' item(s), '+totalQty+' un.','warn');
   showTruckAnim();
@@ -4490,6 +4620,15 @@ function closeGSearch(){
           _lastSavedOpsStr[localOp.id]=JSON.stringify(serverOp);
           return serverOp;
         }
+        // v1.3.8: "Finalizado" local é estado terminal — nunca retrocede por dado antigo do servidor.
+        // Race condition: _saveOpsToTable já atualizou _lastSavedOpsStr para 'finalizado', mas o
+        // heartbeat trouxe resposta antiga do servidor ('aberto'). A guarda de baseline falha
+        // (local === baseline === finalizado), mas o serverOp está desatualizado. Solução: qualquer
+        // OP local finalizada que o servidor ainda não confirmou → manter local sem tocar o baseline.
+        if(localOp.status==='finalizado'&&serverOp.status!=='finalizado')return localOp;
+        // v1.3.8: Despachos parciais locais preservados se servidor ainda não atualizou.
+        // Mesma race condition: baseline já foi atualizado pelo save, mas fetch trouxe estado antigo.
+        if((localOp.partialDispatches||[]).length>(serverOp.partialDispatches||[]).length)return localOp;
         // Mudanças locais não salvas têm prioridade sobre o servidor
         if(_lastSavedOpsStr[localOp.id]&&JSON.stringify(localOp)!==_lastSavedOpsStr[localOp.id])return localOp;
         const ndOp={...serverOp};
@@ -4502,7 +4641,13 @@ function closeGSearch(){
       // Conflitos são mesclados silenciosamente — sem modal interruptivo
 
       // ── Merge Estoque ─────────────────────────────────────────────────────────
+      // FIX v1.3.7: _pendingStockBase coleta as atualizações de baseline do servidor
+      // mas NÃO as aplica imediatamente. Elas só são aplicadas ao _lastSavedStockStr
+      // dentro do guard (!_saveInProgress), garantindo que o baseline sempre fique em
+      // sincronia com _db.stock. Antes desse fix, o baseline era atualizado mesmo com
+      // save em andamento → _db.stock não tinha os itens novos → próximo save deletava.
       let mergedStock=_db.stock||{},mergedRmStock=_db.rawMaterialStock||{},mergedPkStock=_db.packagingStock||{};
+      const _pendingStockBase={};
       if(stockRes.ok){
         const stockRows=await stockRes.json();
         const ns={},nrm={},npk={};
@@ -4511,18 +4656,18 @@ function closeGSearch(){
             const pid=id.slice(2);
             const localVal=(_db.stock||{})[pid];
             ns[pid]=(_lastSavedStockStr[id]&&JSON.stringify(localVal)!==_lastSavedStockStr[id])?localVal:data;
-            _lastSavedStockStr[id]=JSON.stringify(data);
+            _pendingStockBase[id]=JSON.stringify(data);
           }else if(id.startsWith('RM:')){
             const mid=id.slice(3);
             const localVal=(_db.rawMaterialStock||{})[mid];
             nrm[mid]=(_lastSavedStockStr[id]&&JSON.stringify(localVal)!==_lastSavedStockStr[id])?localVal:data;
-            _lastSavedStockStr[id]=JSON.stringify(data);
+            _pendingStockBase[id]=JSON.stringify(data);
           }else if(id.startsWith('PK:')){
             const pid=id.slice(3);
             const localVal=(_db.packagingStock||{})[pid];
             const dqty=data&&typeof data==='object'&&'qty' in data?data.qty:data;
             npk[pid]=(_lastSavedStockStr[id]&&JSON.stringify({qty:localVal})!==_lastSavedStockStr[id])?localVal:dqty;
-            _lastSavedStockStr[id]=JSON.stringify({qty:dqty});
+            _pendingStockBase[id]=JSON.stringify({qty:dqty});
           }
         });
         mergedStock=ns;mergedRmStock=nrm;mergedPkStock=npk;
@@ -4551,6 +4696,9 @@ function closeGSearch(){
       _checkForceLogout(nd);
       if(!S)return;
       if(!_saveInProgress&&_saveQueue===null&&!_failedPayload){
+        // FIX v1.3.7: aplica o baseline de estoque somente quando _db também vai ser
+        // atualizado — garante que _lastSavedStockStr e _db.stock fiquem sempre em sincronia.
+        Object.assign(_lastSavedStockStr,_pendingStockBase);
         // Compara ignorando 'presence' — heartbeats mudam presence a cada 2 min
         // e disparariam refreshCurrentTab() constantemente sem motivo real.
         const {presence:_ndPres,...ndComp}=nd;
@@ -5568,11 +5716,13 @@ function _kpiCard(label,val,sub,color,bg){
   '</div>';
 }
 
-// ─── Alertas de estoque para comprador no login ───
+// ─── Alertas de estoque crítico de MP — modal no login + notificação no bell ──
 function _checkStockAlerts(){
   if(!S)return;
   const roles=_roles(S);
-  if(!roles.includes('comprador')&&!roles.includes('admin'))return;
+  // Alerta de modal: apenas comprador e admin
+  const showModal=roles.includes('comprador')||roles.includes('admin');
+  if(!showModal)return;
   const d=gdb();
   const rmCrit=d.rawMaterials.filter(m=>['zero','abaixo'].includes(_rmStatus(d,m.id)));
   const embCrit=d.packaging.filter(p=>['zero','abaixo'].includes(_packStatus(d,p.id)));
@@ -5582,12 +5732,38 @@ function _checkStockAlerts(){
     ...rmCrit.map(m=>'<li>🌿 <strong>'+esc(m.name)+'</strong> ('+esc(m.code)+') — '+fqty(_rmStockTotal(d,m.id),m.unit||'KG')+(m.minStock?' / mín '+fqty(m.minStock,m.unit||'KG'):'')+' '+(m.unit||'KG')+'</li>'),
     ...embCrit.map(p=>'<li>📦 <strong>'+esc(p.name)+'</strong> ('+esc(p.code)+') — '+fqty(d.packagingStock[p.id]||0,p.unit||'UN')+(p.minStock?' / mín '+fqty(p.minStock,p.unit||'UN'):'')+' '+(p.unit||'UN')+'</li>'),
   ].join('');
+  // Modal pop-up no login (existente)
   Mopen('🚨 Alerta de Estoque Crítico',
     '<div class="alert alert-warn" style="margin-bottom:12px;font-size:14px"><strong>'+total+' item(s)</strong> com estoque zerado ou abaixo do mínimo:</div>'+
     '<ul style="font-size:13px;line-height:2;color:var(--text);padding-left:20px;margin:0">'+list+'</ul>',
     '<button class="btn btn-ghost" onclick="Mclose()">Fechar</button>'+
     '<button class="btn btn-green" onclick="Mclose();goTab(\'suprimentos\')">Ver Suprimentos →</button>'
   );
+  // Notificação persistente no bell — apenas para perfil comprador
+  // Evita duplicar: verifica se já há notificação de estoque crítico criada hoje
+  const today=new Date().toDateString();
+  const jaNotificado=(d.notifications||[]).some(n=>
+    n.type==='estoque_critico'&&
+    new Date(n.createdAt).toDateString()===today&&
+    n.targetRoles&&n.targetRoles.includes('comprador')
+  );
+  if(!jaNotificado){
+    const itens=[
+      ...rmCrit.map(m=>'🌿 '+m.name+' ('+m.code+'): '+fqty(_rmStockTotal(d,m.id),m.unit||'KG')+(m.minStock?' / mín '+fqty(m.minStock,m.unit||'KG'):'')+' '+(m.unit||'KG')),
+      ...embCrit.map(p=>'📦 '+p.name+' ('+p.code+'): '+fqty(d.packagingStock[p.id]||0,p.unit||'UN')+(p.minStock?' / mín '+fqty(p.minStock,p.unit||'UN'):'')+' '+(p.unit||'UN')),
+    ].join('\n');
+    if(!d.notifications)d.notifications=[];
+    d.notifications.push({
+      id:uid(),type:'estoque_critico',
+      targetRoles:['comprador'],
+      message:'🚨 '+total+' item(s) com estoque crítico de MP/Embalagem',
+      detail:itens,
+      createdAt:Date.now(),readBy:{},
+      ttl:24*60*60*1000 // expira em 24h (novo alerta gerado no próximo login)
+    });
+    sdb(d);
+    renderBell();
+  }
 }
 </script>
 
