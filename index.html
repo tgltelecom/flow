@@ -579,8 +579,11 @@ const SUPA_KEY='sb_publishable_yyFwUYtK5D24yeAsd6jkjQ_UuizdNAA';
 const _AUDIT_KEY='tgl_v3_audit'; // linha separada no banco para o log de auditoria (legado)
 const _AUDIT_TABLE='tgl_audit_log'; // tabela dedicada — INSERT atômico por evento
 let _auditLog=[];                     // mantido em memória; nunca entra no payload principal
-const APP_VERSION='1.3.8';
+const APP_VERSION='1.3.9';
 const APP_CHANGELOG={
+  '1.3.9':[
+    'Bug multi-usuário corrigido: OP finalizada por um usuário não fica "em aberto" no servidor quando outro usuário salva simultaneamente',
+  ],
   '1.3.8':[
     'Solução definitiva: baixa de estoque agora usa RPC atômico no servidor (sem race conditions)',
     'Removido DELETE automático de estoque — itens manuais nunca mais somem por limpeza local',
@@ -4625,7 +4628,14 @@ function closeGSearch(){
         // heartbeat trouxe resposta antiga do servidor ('aberto'). A guarda de baseline falha
         // (local === baseline === finalizado), mas o serverOp está desatualizado. Solução: qualquer
         // OP local finalizada que o servidor ainda não confirmou → manter local sem tocar o baseline.
-        if(localOp.status==='finalizado'&&serverOp.status!=='finalizado')return localOp;
+        // v1.3.9: além de preservar local, agenda re-save para corrigir o servidor (cenário multi-usuário:
+        // outro usuário sobrescreveu 'finalizado' com 'ativo' no servidor; este heartbeat detecta e reconstrói).
+        if(localOp.status==='finalizado'&&serverOp.status!=='finalizado'){
+          if(!_saveInProgress&&_saveQueue===null&&!_failedPayload){
+            setTimeout(()=>{if(S){const _rd=gdb();if((_rd.ops||[]).find(o=>o.id===localOp.id&&o.status==='finalizado'))sdb(_rd);}},2000);
+          }
+          return localOp;
+        }
         // v1.3.8: Despachos parciais locais preservados se servidor ainda não atualizou.
         // Mesma race condition: baseline já foi atualizado pelo save, mas fetch trouxe estado antigo.
         if((localOp.partialDispatches||[]).length>(serverOp.partialDispatches||[]).length)return localOp;
