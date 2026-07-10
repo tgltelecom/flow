@@ -579,8 +579,12 @@ const SUPA_KEY='sb_publishable_yyFwUYtK5D24yeAsd6jkjQ_UuizdNAA';
 const _AUDIT_KEY='tgl_v3_audit'; // linha separada no banco para o log de auditoria (legado)
 const _AUDIT_TABLE='tgl_audit_log'; // tabela dedicada — INSERT atômico por evento
 let _auditLog=[];                     // mantido em memória; nunca entra no payload principal
-const APP_VERSION='1.3.9';
+const APP_VERSION='1.4.0';
 const APP_CHANGELOG={
+  '1.4.0':[
+    'Bug crítico corrigido: estoque inventariado por Isis não é mais revertido por dispositivo com versão antiga do app',
+    'Proteção por timestamp: valor local mais recente sempre vence servidor no merge de estoque',
+  ],
   '1.3.9':[
     'Bug multi-usuário corrigido: OP finalizada por um usuário não fica "em aberto" no servidor quando outro usuário salva simultaneamente',
   ],
@@ -4656,27 +4660,42 @@ function closeGSearch(){
       // dentro do guard (!_saveInProgress), garantindo que o baseline sempre fique em
       // sincronia com _db.stock. Antes desse fix, o baseline era atualizado mesmo com
       // save em andamento → _db.stock não tinha os itens novos → próximo save deletava.
+      // FIX v1.4.0: proteção por timestamp ('at'). Quando local==baseline (nenhuma mudança
+      // pendente), o merge usava o valor do servidor incondicionalmente. Se um dispositivo
+      // antigo (pré-v1.3.8) apagava o tgl_stock e re-inseria com valor desatualizado, o
+      // heartbeat revertia o valor correto local. Agora: se local.at > server.at → local vence,
+      // mesmo sem mudança pendente. Garante que o inventário de Isis não seja apagado por outro device.
       let mergedStock=_db.stock||{},mergedRmStock=_db.rawMaterialStock||{},mergedPkStock=_db.packagingStock||{};
       const _pendingStockBase={};
       if(stockRes.ok){
         const stockRows=await stockRes.json();
         const ns={},nrm={},npk={};
+        // Helper: retorna true se localVal é mais recente que serverData (comparação de timestamp 'at')
+        const _localIsNewer=(localVal,serverData)=>{
+          const lat=localVal&&typeof localVal==='object'?localVal.at:null;
+          const sat=serverData&&typeof serverData==='object'?serverData.at:null;
+          return lat&&sat&&lat>sat;
+        };
         stockRows.forEach(({id,data})=>{
           if(id.startsWith('P:')){
             const pid=id.slice(2);
             const localVal=(_db.stock||{})[pid];
-            ns[pid]=(_lastSavedStockStr[id]&&JSON.stringify(localVal)!==_lastSavedStockStr[id])?localVal:data;
+            // Local vence se: (1) tem mudança pendente não salva, OU (2) local é mais recente que servidor
+            const localWins=(_lastSavedStockStr[id]&&JSON.stringify(localVal)!==_lastSavedStockStr[id])||_localIsNewer(localVal,data);
+            ns[pid]=localWins?localVal:data;
             _pendingStockBase[id]=JSON.stringify(data);
           }else if(id.startsWith('RM:')){
             const mid=id.slice(3);
             const localVal=(_db.rawMaterialStock||{})[mid];
-            nrm[mid]=(_lastSavedStockStr[id]&&JSON.stringify(localVal)!==_lastSavedStockStr[id])?localVal:data;
+            const localWins=(_lastSavedStockStr[id]&&JSON.stringify(localVal)!==_lastSavedStockStr[id])||_localIsNewer(localVal,data);
+            nrm[mid]=localWins?localVal:data;
             _pendingStockBase[id]=JSON.stringify(data);
           }else if(id.startsWith('PK:')){
             const pid=id.slice(3);
             const localVal=(_db.packagingStock||{})[pid];
             const dqty=data&&typeof data==='object'&&'qty' in data?data.qty:data;
-            npk[pid]=(_lastSavedStockStr[id]&&JSON.stringify({qty:localVal})!==_lastSavedStockStr[id])?localVal:dqty;
+            const localWins=(_lastSavedStockStr[id]&&JSON.stringify({qty:localVal})!==_lastSavedStockStr[id]);
+            npk[pid]=localWins?localVal:dqty;
             _pendingStockBase[id]=JSON.stringify({qty:dqty});
           }
         });
