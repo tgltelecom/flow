@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>Flow by TGL</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
@@ -579,8 +582,13 @@ const SUPA_KEY='sb_publishable_yyFwUYtK5D24yeAsd6jkjQ_UuizdNAA';
 const _AUDIT_KEY='tgl_v3_audit'; // linha separada no banco para o log de auditoria (legado)
 const _AUDIT_TABLE='tgl_audit_log'; // tabela dedicada — INSERT atômico por evento
 let _auditLog=[];                     // mantido em memória; nunca entra no payload principal
-const APP_VERSION='1.4.0';
+const APP_VERSION='1.4.1';
 const APP_CHANGELOG={
+  '1.4.1':[
+    'Proteção contra versão desatualizada: admin pode forçar atualização de todos os dispositivos pelo Supabase',
+    'Modal bloqueante exibido para dispositivos com versão abaixo da mínima exigida',
+    'Meta tags no-cache: browser sempre busca versão mais recente ao abrir o app',
+  ],
   '1.4.0':[
     'Bug crítico corrigido: estoque inventariado por Isis não é mais revertido por dispositivo com versão antiga do app',
     'Proteção por timestamp: valor local mais recente sempre vence servidor no merge de estoque',
@@ -692,6 +700,40 @@ const APP_CHANGELOG={
     'Notificação de novidades ao entrar após atualização',
   ]
 };
+// ── VERSION GATE ─────────────────────────────────────────────────────────────
+// sysMinVersion (no blob Supabase): versão mínima exigida. Se APP_VERSION for
+// menor, bloqueia o app e pede hard refresh.
+// sysForceReload (no blob Supabase): token numérico. Se diferir do salvo no
+// localStorage, força hard reload em todos os dispositivos conectados.
+// Para acionar via Supabase SQL Editor (prod):
+//   UPDATE app_data SET data = data || '{"sysMinVersion":"1.4.1"}'::jsonb WHERE key='tgl_v3';
+//   UPDATE app_data SET data = data || '{"sysForceReload":<<timestamp_ms>>}'::jsonb WHERE key='tgl_v3';
+function _versionLt(a,b){
+  const pa=(a||'0').split('.').map(Number),pb=(b||'0').split('.').map(Number);
+  for(let i=0;i<Math.max(pa.length,pb.length);i++){
+    if((pa[i]||0)<(pb[i]||0))return true;
+    if((pa[i]||0)>(pb[i]||0))return false;
+  }
+  return false;
+}
+let _versionBlockShown=false;
+function _showVersionBlock(minV){
+  if(_versionBlockShown)return;
+  _versionBlockShown=true;
+  // Impede qualquer save durante bloqueio
+  window._blockAllSaves=true;
+  const ov=document.createElement('div');
+  ov.id='_ver-block';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(8,14,24,.97);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:999999;gap:20px;';
+  ov.innerHTML=`<div style="font-size:52px">⚠️</div>
+<h2 style="color:#ef4444;font-size:20px;font-family:sans-serif;text-align:center;margin:0">App desatualizado</h2>
+<p style="color:#8ea8c0;font-family:sans-serif;text-align:center;max-width:360px;line-height:1.7;margin:0">
+  Você está na versão <strong style="color:#f59e0b">v${APP_VERSION}</strong> mas a mínima exigida é <strong style="color:#22c55e">v${minV}</strong>.<br>
+  Pressione <kbd style="background:#1a3048;padding:2px 8px;border-radius:4px;color:#22c55e;font-family:monospace">Ctrl+Shift+R</kbd> (Win) ou <kbd style="background:#1a3048;padding:2px 8px;border-radius:4px;color:#22c55e;font-family:monospace">Cmd+Shift+R</kbd> (Mac) para atualizar.
+</p>
+<button onclick="location.reload(true)" style="background:#22c55e;color:#080e18;border:none;padding:13px 32px;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 4px 24px rgba(34,197,94,.35)">🔄 Atualizar agora</button>`;
+  document.body.appendChild(ov);
+}
 let _db=null;
 // ── OPS TABLE ────────────────────────────────────────────────────────────────
 // Cada OP vive em sua própria linha → sem race condition de blob compartilhado.
@@ -1035,6 +1077,7 @@ let _lastSaveAt=0;      // timestamp of last successful save (for background syn
 
 async function saveDBRemote(d){
   // Always queue the latest payload; if a save is running, it will pick this up
+  if(window._blockAllSaves)return; // Version gate: app desatualizado, salvar bloqueado
   _saveQueue=d;
   if(_saveInProgress)return;
   _saveInProgress=true;
@@ -4615,6 +4658,25 @@ function closeGSearch(){
       if(!blobRes.ok)return;
       const rows=await blobRes.json();
       if(!rows||!rows.length)return;
+
+      // ── Version gate + Force reload ───────────────────────────────────────────
+      const _srvMeta=rows[0].data||{};
+      // Force reload: token muda no servidor → todos os clientes conectados recarregam em ~60s
+      if(_srvMeta.sysForceReload){
+        const _frKey='_tgl_fr';
+        const _frLocal=localStorage.getItem(_frKey);
+        const _frSrv=String(_srvMeta.sysForceReload);
+        if(_frLocal&&_frLocal!==_frSrv){
+          localStorage.setItem(_frKey,_frSrv);
+          setTimeout(()=>{location.reload(true);},800);
+          return;
+        }else if(!_frLocal){localStorage.setItem(_frKey,_frSrv);}
+      }
+      // Versão mínima: bloqueia app se versão local for menor que a exigida
+      if(_srvMeta.sysMinVersion&&_versionLt(APP_VERSION,_srvMeta.sysMinVersion)){
+        _showVersionBlock(_srvMeta.sysMinVersion);
+        return;
+      }
 
       // ── Merge OPs ────────────────────────────────────────────────────────────
       const serverOpsRows=opsRes.ok?(await opsRes.json()):[];
