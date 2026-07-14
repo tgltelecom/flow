@@ -582,8 +582,12 @@ const SUPA_KEY='sb_publishable_yyFwUYtK5D24yeAsd6jkjQ_UuizdNAA';
 const _AUDIT_KEY='tgl_v3_audit'; // linha separada no banco para o log de auditoria (legado)
 const _AUDIT_TABLE='tgl_audit_log'; // tabela dedicada — INSERT atômico por evento
 let _auditLog=[];                     // mantido em memória; nunca entra no payload principal
-const APP_VERSION='1.4.1';
+const APP_VERSION='1.4.2';
 const APP_CHANGELOG={
+  '1.4.2':[
+    'Auto-update: ao abrir a tela de login, o app busca a versão mais recente do servidor e recarrega automaticamente se houver atualização',
+    'Histórico de estoque por produto: clique em "📋 Histórico" na tabela de estoque para ver todas as entradas, saídas e inventários com totalizadores',
+  ],
   '1.4.1':[
     'Proteção contra versão desatualizada: admin pode forçar atualização de todos os dispositivos pelo Supabase',
     'Modal bloqueante exibido para dispositivos com versão abaixo da mínima exigida',
@@ -700,6 +704,22 @@ const APP_CHANGELOG={
     'Notificação de novidades ao entrar após atualização',
   ]
 };
+// ── AUTO-UPDATE ──────────────────────────────────────────────────────────────
+// Na tela de login, busca o index.html do servidor (sem cache) e compara a
+// versão. Se houver versão nova, faz hard reload automaticamente.
+// Falha silenciosa em caso de erro ou offline.
+(async function _autoUpdate(){
+  try{
+    const res=await fetch(location.pathname+'?_au='+Date.now(),{cache:'no-store',headers:{'Cache-Control':'no-cache'}});
+    if(!res.ok)return;
+    const html=await res.text();
+    const m=html.match(/const APP_VERSION='([^']+)'/);
+    if(m&&m[1]&&m[1]!==APP_VERSION){
+      console.log('[TGL] Auto-update: v'+APP_VERSION+' → v'+m[1]+'. Recarregando...');
+      location.reload(true);
+    }
+  }catch(e){/* offline ou erro — ignora */}
+})();
 // ── VERSION GATE ─────────────────────────────────────────────────────────────
 // sysMinVersion (no blob Supabase): versão mínima exigida. Se APP_VERSION for
 // menor, bloqueia o app e pede hard refresh.
@@ -3607,7 +3627,7 @@ function renderEstoque(){
         '<td style="text-align:center">'+(dem>0?'<span onmouseenter="showOpTip(event,\''+p.id+'\')" onmouseleave="hideOpTip()" style="background:rgba(245,158,11,.15);color:var(--warn);border:1px solid rgba(245,158,11,.25);border-radius:4px;padding:2px 8px;font-size:13px;font-weight:600;cursor:default">🔒 '+fnum(dem)+'</span>':'<span style="color:var(--muted);font-size:12px">—</span>')+'</td>'+
         '<td style="text-align:center">'+(avail===null?'—':avail>=0?'<span style="color:var(--green);font-weight:700;font-size:16px">+'+fnum(avail)+'</span>':'<span style="color:var(--danger);font-weight:700;font-size:14px">⚠️ Falta '+fnum(Math.abs(avail))+'</span>')+'</td>'+
         '<td><span class="'+cls+'"><span class="sem-dot"></span>'+label+'</span></td>'+
-        '<td style="white-space:nowrap"><button class="btn btn-ghost btn-sm" onclick="openLancamento(\x27'+p.id+'\x27)">Lançar</button> <button class="btn btn-ghost btn-sm" onclick="openInventario(\x27'+p.id+'\x27)">Inventário</button></td></tr>';
+        '<td style="white-space:nowrap"><button class="btn btn-ghost btn-sm" onclick="openLancamento(\x27'+p.id+'\x27)">Lançar</button> <button class="btn btn-ghost btn-sm" onclick="openInventario(\x27'+p.id+'\x27)">Inventário</button> <button class="btn btn-ghost btn-sm" onclick="openHistoricoEstoque(\x27'+p.id+'\x27)">📋 Histórico</button></td></tr>';
     }).join('')+'</tbody></table>';
   if(qSaved&&el('srch-est')){const inp=el('srch-est');inp.focus();inp.setSelectionRange(inp.value.length,inp.value.length);}
 }
@@ -3685,6 +3705,90 @@ function saveInventario(){
 function openAddEstoque(){openLancamento();}
 function openAjusteEst(pid){openInventario(pid);}
 function saveAjuste(pid){saveInventario();}
+
+async function openHistoricoEstoque(pid){
+  const d=gdb();
+  const p=d.products.find(x=>x.id===pid);
+  if(!p){toast('Produto não encontrado','err');return;}
+  const pname=p.name;
+  const stockNow=d.stock[pid];
+  Mopen('📋 Histórico de Estoque — '+esc(pname),
+    '<div id="hist-body" style="min-height:120px"><div style="text-align:center;padding:40px;color:var(--muted)">🔄 Carregando histórico...</div></div>',
+    '<button class="btn btn-ghost" onclick="Mclose()">Fechar</button>'
+  );
+  try{
+    const nameQ=encodeURIComponent('*'+pname+'*');
+    const r=await _sf('/rest/v1/'+_AUDIT_TABLE+'?select=*&details=ilike.'+nameQ+'&order=at.desc&limit=300');
+    if(!r.ok){const e2=await r.text();throw new Error(e2);}
+    const rows=await r.json();
+    const stockActions=new Set(['Estoque lançado','Saída de estoque','Inventário','Inventário inicial registrado']);
+    const filtered=rows.filter(row=>stockActions.has(row.action));
+    let totalEnt=0,totalSai=0;
+    let html='';
+    if(!filtered.length){
+      html='<div class="empty"><div class="ei">📋</div><p>Nenhum histórico encontrado para este produto</p></div>';
+    }else{
+      const trs=filtered.map(row=>{
+        const dt=new Date(row.at);
+        const dtStr=dt.toLocaleDateString('pt-BR')+' '+dt.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+        const det=row.details||'';
+        let tipo='',deltaStr='—',cls='color:var(--muted)';
+        if(row.action==='Estoque lançado'){
+          const m=det.match(/[:\s]\+(\d+)/);
+          const qty=m?+m[1]:null;
+          if(qty!=null)totalEnt+=qty;
+          tipo='Entrada';cls='color:var(--green)';
+          deltaStr=qty!=null?'<span style="'+cls+';font-weight:700">+'+fnum(qty)+'</span>':'—';
+        }else if(row.action==='Saída de estoque'){
+          const m=det.match(/[:\s]-(\d+)/);
+          const qty=m?+m[1]:null;
+          if(qty!=null)totalSai+=qty;
+          tipo='Saída';cls='color:var(--danger)';
+          deltaStr=qty!=null?'<span style="'+cls+';font-weight:700">-'+fnum(qty)+'</span>':'—';
+        }else if(row.action==='Inventário'){
+          const m=det.match(/→(\d+)\s*un/);
+          const qty=m?+m[1]:null;
+          tipo='Inventário';cls='color:var(--accent)';
+          deltaStr=qty!=null?'<span style="'+cls+'">'+fnum(qty)+'</span>':'—';
+        }else if(row.action==='Inventário inicial registrado'){
+          const parts=det.split(' | ');
+          const part=parts.find(s=>s.toLowerCase().includes(pname.toLowerCase()));
+          const m=part?part.match(/(\d+)\s*un/):null;
+          const qty=m?+m[1]:null;
+          tipo='Inv. inicial';cls='color:var(--accent)';
+          deltaStr=qty!=null?'<span style="'+cls+'">'+fnum(qty)+'</span>':'—';
+        }
+        return '<tr>'+
+          '<td style="font-size:12px;white-space:nowrap;color:var(--muted)">'+dtStr+'</td>'+
+          '<td><span style="'+cls+'">'+tipo+'</span></td>'+
+          '<td style="text-align:center">'+deltaStr+'</td>'+
+          '<td style="font-size:12px;color:var(--muted)">'+esc(row.uname||'—')+'</td>'+
+          '</tr>';
+      }).join('');
+      html='<div style="display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap">'+
+        '<div style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.25);border-radius:8px;padding:10px 16px;min-width:100px">'+
+        '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Total entradas</div>'+
+        '<div style="font-size:22px;font-weight:700;color:var(--green)">+'+fnum(totalEnt)+'</div></div>'+
+        '<div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.25);border-radius:8px;padding:10px 16px;min-width:100px">'+
+        '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Total saídas</div>'+
+        '<div style="font-size:22px;font-weight:700;color:var(--danger)">-'+fnum(totalSai)+'</div></div>'+
+        (stockNow!=null?'<div style="background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.25);border-radius:8px;padding:10px 16px;min-width:100px">'+
+        '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Saldo atual</div>'+
+        '<div style="font-size:22px;font-weight:700;color:var(--accent)">'+fnum(stockNow.qty)+'</div></div>':'')+'</div>'+
+        '<div class="tw" style="max-height:360px;overflow-y:auto">'+
+        '<table><thead><tr>'+
+        '<th>Data/Hora</th><th>Tipo</th><th style="text-align:center">Qtd</th><th>Usuário</th>'+
+        '</tr></thead><tbody>'+trs+'</tbody></table></div>'+
+        '<div style="font-size:11px;color:var(--muted);margin-top:8px">'+filtered.length+' registro(s) encontrado(s) — últimos 180 dias</div>';
+    }
+    const bodyEl=el('hist-body');
+    if(bodyEl)bodyEl.innerHTML=html;
+  }catch(e2){
+    console.error('[TGL] hist erro:',e2);
+    const bodyEl=el('hist-body');
+    if(bodyEl)bodyEl.innerHTML='<div class="alert alert-danger">Erro ao carregar histórico: '+esc(String(e2))+'</div>';
+  }
+}
 
 // ═══════════════════════════════════
 // ── PRODUÇÃO ──
