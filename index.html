@@ -582,8 +582,15 @@ const SUPA_KEY='sb_publishable_yyFwUYtK5D24yeAsd6jkjQ_UuizdNAA';
 const _AUDIT_KEY='tgl_v3_audit'; // linha separada no banco para o log de auditoria (legado)
 const _AUDIT_TABLE='tgl_audit_log'; // tabela dedicada — INSERT atômico por evento
 let _auditLog=[];                     // mantido em memória; nunca entra no payload principal
-const APP_VERSION='1.4.2';
+const APP_VERSION='1.4.3';
 const APP_CHANGELOG={
+  '1.4.3':[
+    'Correção: abas de Suprimentos e Produção não mudam mais sozinhas durante sincronização automática',
+    'Correção: produtos de revenda agora aparecem no autocomplete ao adicionar item manualmente em OP',
+    'Correção: "Cadastrar novo produto" na OP agora abre o formulário de cadastro diretamente',
+    'Correção: sistema bloqueia cadastro de produto com SKU ou nome já existente',
+    'Aba "Produção/Sep. Estoque" renomeada para "Itens de Revenda"',
+  ],
   '1.4.2':[
     'Auto-update: ao abrir a tela de login, o app busca a versão mais recente do servidor e recarrega automaticamente se houver atualização',
     'Histórico de estoque por produto: clique em "📋 Histórico" na tabela de estoque para ver todas as entradas, saídas e inventários com totalizadores',
@@ -2433,6 +2440,9 @@ function saveProd(id){
   const sectors=isStock?[]:Array.from(document.querySelectorAll('input[name="pf-sec"]:checked')).map(c=>c.value);
   if(!isStock&&!sectors.length){toast('Selecione ao menos um setor','err');return;}
   const d=gdb();
+  if(sku){const dupSku=d.products.find(x=>x.sku&&x.sku.toUpperCase()===sku.toUpperCase()&&x.id!==id);if(dupSku){toast('SKU "'+sku+'" já está em uso por "'+dupSku.name+'"','err');return;}}
+  const dupName=d.products.find(x=>x.name.trim().toLowerCase()===name.toLowerCase()&&x.id!==id);
+  if(dupName){toast('Já existe um produto com esse nome','err');return;}
   if(id){const i=d.products.findIndex(x=>x.id===id);d.products[i]={...d.products[i],name,sku,unit,isStock,sectors};}
   else d.products.push({id:uid(),name,sku,unit,isStock,sectors});
   logAction(d,id?'Produto editado':'Produto criado','['+sku+'] '+name);
@@ -3281,7 +3291,7 @@ function submitEditOPItemQty(opId,idx){
 }
 function openAddItemToOP(opId){
   const d=gdb();
-  const prods=d.products.filter(p=>!p.isStock);
+  const prods=d.products;
   const opts=prods.map(p=>'<div class="ac-opt" data-pid="'+p.id+'">'+(p.sku?'<span class="sku">'+esc(p.sku)+'</span> ':'')+esc(p.name)+'</div>').join('');
   Mopen('➕ Adicionar Item à OP',
     '<div class="fg"><label>Produto *</label>'+
@@ -3320,7 +3330,8 @@ function openAddItemToOP(opId){
     const newBtn=el('ai-new');
     if(newBtn){newBtn.addEventListener('mousedown',e=>{
       e.preventDefault();Mclose();
-      stab('prod');toast('Cadastre o produto e tente novamente','info');
+      goTab('cadastros');
+      setTimeout(()=>{if(el('st-prod'))stab('prod');openProdForm();},80);
     });}
   },60);
 }
@@ -3510,12 +3521,16 @@ function supArrow(col){return _supSort.col===col?(_supSort.dir===1?' ▲':' ▼'
 
 function rSuprimentos(cnt){
   const isCmp=isComprador();
+  // Preserva a sub-aba ativa no refresh automático
+  const _activeSst=(document.querySelector('.stab.on[id^="sst-"]')||{}).id;
+  const _curSst=_activeSst?_activeSst.replace('sst-',''):null;
   const tabs=isCmp
     ?'<button class="stab on" id="sst-mp" onclick="sstab(\'mp\')">🌿 Matéria Prima</button><button class="stab" id="sst-emb" onclick="sstab(\'emb\')">📦 Embalagens</button><button class="stab" id="sst-est" onclick="sstab(\'est\')">🏷️ Estoque Produtos</button>'
     :'<button class="stab on" id="sst-est" onclick="sstab(\'est\')">🏷️ Estoque</button><button class="stab" id="sst-mp" onclick="sstab(\'mp\')">🌿 Matéria Prima</button><button class="stab" id="sst-emb" onclick="sstab(\'emb\')">📦 Embalagens</button>';
   cnt.innerHTML='<div class="ptitle">📦 Suprimentos</div><div class="stabs">'+tabs+'</div><div id="sup-tabs-c"></div>';
   _supFilter='';_supSort={col:'name',dir:1};
-  if(isCmp)sstab('mp');else sstab('est');
+  const _defSst=isCmp?'mp':'est';
+  sstab((_curSst&&el('sst-'+_curSst))?_curSst:_defSst);
 }
 function sstab(t){
   document.querySelectorAll('#sup-tabs-c').forEach(()=>{});
@@ -3844,10 +3859,13 @@ function rProducao(el2){
   const defaultSec=isExpOnly?'separacao':(sectors.find(s=>roles.includes(s))||'separacao');
   const isSingleSectorUser=roles.length===1&&sectors.includes(roles[0]);
   const secTabs=sectors.filter(canSee).map(s=>'<button class="stab '+(s===defaultSec?'on':'')+'" id="pst-'+s+'" onclick="goProducao(\''+s+'\')">'+{preformados:'🧬 Preformados',estamparia:'🔨 Estamparia',espinar:'🌀 Espinar/Fita'}[s]+'</button>').join('');
-  const sepTab=canSep?'<button class="stab '+(defaultSec==='separacao'?'on':'')+'" id="pst-separacao" onclick="goProducao(\'separacao\')">📦 Produção/Sep. Estoque</button>':'';
+  const sepTab=canSep?'<button class="stab '+(defaultSec==='separacao'?'on':'')+'" id="pst-separacao" onclick="goProducao(\'separacao\')">🏷️ Itens de Revenda</button>':'';
   const refreshBtn=isSingleSectorUser
     ?'<button id="tablet-refresh-btn" class="btn btn-green" onclick="_tabletRefresh()" style="font-size:15px;padding:10px 20px;border-radius:10px">🔄 Atualizar</button>'
     :'';
+  // Preserva a sub-aba ativa no refresh automático
+  const _activePst=(document.querySelector('.stab.on[id^="pst-"]')||{}).id;
+  const _curPst=_activePst?_activePst.replace('pst-',''):null;
   el2.innerHTML='<div class="ptitle">Produção</div>'+
     '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">'+
     '<div class="stabs" style="margin-bottom:0">'+secTabs+sepTab+'</div>'+
@@ -3857,7 +3875,7 @@ function rProducao(el2){
     '</div>'+
     '</div>'+
     '<div id="prod-c"></div>';
-  goProducao(defaultSec);
+  goProducao((_curPst&&el('pst-'+_curPst))?_curPst:defaultSec);
 }
 
 function goProducao(sec){
