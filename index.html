@@ -582,8 +582,11 @@ const SUPA_KEY='sb_publishable_yyFwUYtK5D24yeAsd6jkjQ_UuizdNAA';
 const _AUDIT_KEY='tgl_v3_audit'; // linha separada no banco para o log de auditoria (legado)
 const _AUDIT_TABLE='tgl_audit_log'; // tabela dedicada — INSERT atômico por evento
 let _auditLog=[];                     // mantido em memória; nunca entra no payload principal
-const APP_VERSION='1.4.3';
+const APP_VERSION='1.4.4';
 const APP_CHANGELOG={
+  '1.4.4':[
+    'Merge de produtos duplicados: botão "🔀 Duplicatas" na aba Produtos transfere referências de OPs e estoque antes de remover o duplicado',
+  ],
   '1.4.3':[
     'Correção: abas de Suprimentos e Produção não mudam mais sozinhas durante sincronização automática',
     'Correção: produtos de revenda agora aparecem no autocomplete ao adicionar item manualmente em OP',
@@ -2357,7 +2360,9 @@ function stab(t){
 function tabProd(){
   const sc=el('stcontent');
   if(!el('prod-tbl')){
-    sc.innerHTML='<div class="card"><div class="card-header"><div><div class="card-title">Produtos cadastrados</div></div><button class="btn btn-green btn-sm" onclick="openProdForm()">+ Novo Produto</button></div>'+
+    sc.innerHTML='<div class="card"><div class="card-header"><div><div class="card-title">Produtos cadastrados</div></div><div style="display:flex;gap:6px">'+
+    (S&&_roles(S).includes('admin')?'<button class="btn btn-ghost btn-sm" onclick="openMergeDuplicates()">🔀 Duplicatas</button>':'')+
+    '<button class="btn btn-green btn-sm" onclick="openProdForm()">+ Novo Produto</button></div></div>'+
     '<div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap">'+
     '<input class="sinput" id="srch-p" placeholder="Buscar por código ou nome..." oninput="filterProd()" style="flex:1;min-width:200px;max-width:360px">'+
     '<select class="sselect" id="filt-tipo" onchange="filterProd()"><option value="">Todos os tipos</option><option value="revenda">Revenda</option><option value="producao">Produção</option></select>'+
@@ -2455,6 +2460,92 @@ function delProd(id){
   if(inUse){toast('Produto está em uso em OPs ativas. Finalize-as antes de excluir.','err');return;}
   const _dp=d.products.find(x=>x.id===id);logAction(d,'Produto excluído',_dp?'['+(_dp.sku||'—')+'] '+_dp.name:'id:'+id);
   d.products=d.products.filter(p=>p.id!==id);sdb(d);toast('Produto excluído','ok');tabProd();
+}
+
+function _findDuplicateGroups(d){
+  // Agrupa por SKU (prioritário) e por nome normalizado (fallback para sem SKU)
+  const groups=[];
+  const seen=new Set();
+  // Por SKU
+  const bySku={};
+  d.products.forEach(p=>{if(p.sku&&p.sku.trim()){const k=p.sku.trim().toUpperCase();(bySku[k]=bySku[k]||[]).push(p);}});
+  Object.values(bySku).filter(g=>g.length>1).forEach(g=>{g.forEach(p=>seen.add(p.id));groups.push({key:'SKU: '+g[0].sku,prods:g});});
+  // Por nome (só para produtos sem SKU ou com SKU único mas nome igual)
+  const byName={};
+  d.products.filter(p=>!seen.has(p.id)).forEach(p=>{const k=p.name.trim().toLowerCase();(byName[k]=byName[k]||[]).push(p);});
+  Object.values(byName).filter(g=>g.length>1).forEach(g=>{groups.push({key:'Nome: '+g[0].name,prods:g});});
+  return groups;
+}
+
+function openMergeDuplicates(){
+  const d=gdb();
+  const groups=_findDuplicateGroups(d);
+  if(!groups.length){toast('Nenhuma duplicata encontrada!','ok');return;}
+  // Conta OPs que referenciam cada produto
+  const opCount=pid=>d.ops.filter(o=>o.items&&o.items.some(i=>i.pid===pid)).length;
+  const stockQty=pid=>{const s=d.stock[pid];return s!=null?fnum(s.qty)+' un.':'Sem estoque';};
+  let body='<p style="color:var(--muted);margin-bottom:16px">'+groups.length+' grupo(s) de duplicatas encontrado(s). Escolha qual produto manter em cada grupo — o outro será removido e suas referências transferidas.</p>';
+  groups.forEach((g,gi)=>{
+    body+='<div style="border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px">'+
+      '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">'+esc(g.key)+'</div>'+
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">'+
+      g.prods.map(p=>{
+        const ops=opCount(p.id);
+        const stk=stockQty(p.id);
+        return '<div style="background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:12px">'+
+          '<div style="font-weight:600;margin-bottom:4px;font-size:13px">'+esc(p.name)+'</div>'+
+          '<div style="font-size:12px;color:var(--muted);margin-bottom:8px">'+
+          (p.sku?'<span class="sku" style="margin-right:6px">'+esc(p.sku)+'</span>':'<span style="color:var(--muted)">Sem SKU</span> ')+
+          ' · '+ops+' OP(s) · '+stk+'</div>'+
+          '<button class="btn btn-green btn-sm" onclick="executeMerge(\''+p.id+'\',\''+gi+'\')" style="width:100%">✅ Manter este</button>'+
+          '</div>';
+      }).join('')+
+      '</div></div>';
+  });
+  // Guarda os grupos no contexto global para o executeMerge acessar
+  window._mergeGroups=groups;
+  Mopen('🔀 Mesclar Produtos Duplicados',body,'<button class="btn btn-ghost" onclick="Mclose()">Fechar</button>');
+}
+
+function executeMerge(primaryId, groupIdx){
+  const g=window._mergeGroups&&window._mergeGroups[+groupIdx];
+  if(!g)return;
+  const secondaryIds=g.prods.map(p=>p.id).filter(id=>id!==primaryId);
+  if(!secondaryIds.length)return;
+  const d=gdb();
+  const primary=d.products.find(p=>p.id===primaryId);
+  if(!primary){toast('Produto principal não encontrado','err');return;}
+  let totalOpsUpdated=0;
+  secondaryIds.forEach(secId=>{
+    const secondary=d.products.find(p=>p.id===secId);
+    if(!secondary)return;
+    // Transfere referências nas OPs
+    d.ops.forEach(op=>{
+      (op.items||[]).forEach(item=>{
+        if(item.pid===secId){
+          item.pid=primaryId;
+          item.productName=primary.name;
+          item.sku=primary.sku||item.sku;
+          totalOpsUpdated++;
+        }
+      });
+    });
+    // Funde estoque: mantém o de maior qty; se primary não tem, usa o do secundário
+    const ps=d.stock[primaryId],ss=d.stock[secId];
+    if(!ps&&ss){d.stock[primaryId]=ss;}
+    else if(ps&&ss&&ss.qty>ps.qty){d.stock[primaryId]=ss;}
+    delete d.stock[secId];
+    // Remove produto secundário
+    d.products=d.products.filter(p=>p.id!==secId);
+    logAction(d,'Produto mesclado','['+( secondary.sku||'—')+'] '+secondary.name+' → '+primary.name);
+  });
+  sdb(d);
+  toast('Mesclado! '+totalOpsUpdated+' referência(s) de OP atualizadas.','ok');
+  // Reabre o modal com grupos atualizados
+  setTimeout(()=>{
+    const remaining=_findDuplicateGroups(gdb());
+    if(remaining.length){openMergeDuplicates();}else{Mclose();toast('Todas as duplicatas foram resolvidas!','ok');tabProd();}
+  },200);
 }
 
 function tabCli(){
