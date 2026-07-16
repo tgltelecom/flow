@@ -582,8 +582,15 @@ const SUPA_KEY='sb_publishable_yyFwUYtK5D24yeAsd6jkjQ_UuizdNAA';
 const _AUDIT_KEY='tgl_v3_audit'; // linha separada no banco para o log de auditoria (legado)
 const _AUDIT_TABLE='tgl_audit_log'; // tabela dedicada — INSERT atômico por evento
 let _auditLog=[];                     // mantido em memória; nunca entra no payload principal
-const APP_VERSION='1.4.5';
+const APP_VERSION='1.4.6';
 const APP_CHANGELOG={
+  '1.4.6':[
+    'Correção crítica: estoque de Embalagens (PK) não reverte mais para valores antigos após sincronização automática',
+    'Correção: baseline de comparação PK unificado em formato {qty} — elimina falso-positivo que forçava re-save de todos itens a cada heartbeat',
+    'Correção: _pkServerAt preserva timestamps reais do servidor, evitando timestamps espúrios via Date.now()',
+    'Correção: packagingStockAt propagado corretamente em toda a cadeia loadDB → saveDBRemote → _saveStockToTable → _syncFromServer',
+    'Correção: refreshDB também usa baseline {qty} para PK ao recarregar estoque manualmente',
+  ],
   '1.4.5':[
     'Proteção de timestamp em estoque de MP e Embalagens: valor local mais recente nunca é sobrescrito por dado antigo do servidor',
     'Busca/filtro por código ou nome nas abas Matéria-Prima e Embalagens de Suprimentos',
@@ -778,6 +785,7 @@ let _lastSavedOpsStr={}; // {opId: JSON.stringify(op)} — detecção de mudanç
 
 const _STOCK_TABLE='tgl_stock';
 let _lastSavedStockStr={}; // {prefixedId: JSON.stringify(data)} — P:pid, RM:mid, PK:pid
+let _pkServerAt={}; // {pid: timestamp_ms} — cache do 'at' do servidor para itens PK, evita uso de Date.now() como fallback
 
 const _MOV_TABLE='tgl_movements';
 let _lastSavedMovIds=new Set(); // IDs de movimentos já persistidos no servidor
@@ -831,15 +839,22 @@ async function _loadStock(){
   if(!r.ok)return null;
   const rows=await r.json();
   _lastSavedStockStr={};
-  rows.forEach(row=>{_lastSavedStockStr[row.id]=JSON.stringify(row.data);});
+  _pkServerAt={};
   const stock={},rmStock={},pkStock={},pkStockAt={};
   rows.forEach(({id,data})=>{
-    if(id.startsWith('P:'))stock[id.slice(2)]=data;
-    else if(id.startsWith('RM:'))rmStock[id.slice(3)]=data;
-    else if(id.startsWith('PK:')){
+    if(id.startsWith('P:')){
+      stock[id.slice(2)]=data;
+      _lastSavedStockStr[id]=JSON.stringify(data);
+    }else if(id.startsWith('RM:')){
+      rmStock[id.slice(3)]=data;
+      _lastSavedStockStr[id]=JSON.stringify(data);
+    }else if(id.startsWith('PK:')){
       const pid=id.slice(3);
-      pkStock[pid]=data&&typeof data==='object'&&'qty' in data?data.qty:data;
-      if(data&&data.at)pkStockAt[pid]=data.at;
+      const qty=data&&typeof data==='object'&&'qty' in data?data.qty:data;
+      pkStock[pid]=qty;
+      if(data&&data.at){pkStockAt[pid]=data.at;_pkServerAt[pid]=data.at;}
+      // Baseline para PK usa APENAS {qty} — sem 'at' — para evitar falsos positivos na comparação
+      _lastSavedStockStr[id]=JSON.stringify({qty});
     }
   });
   return {stock,rawMaterialStock:rmStock,packagingStock:pkStock,packagingStockAt:pkStockAt};
@@ -857,9 +872,13 @@ async function _saveStockToTable(d){
   });
   Object.entries(d.packagingStock||{}).forEach(([pid,val])=>{
     const id='PK:'+pid;currentKeys.add(id);
-    const at=(d.packagingStockAt||{})[pid]||Date.now();
-    const data={qty:val,at};
-    if(JSON.stringify(data)!==_lastSavedStockStr[id])rows.push({id,data,updated_at:new Date().toISOString()});
+    // Comparação usa APENAS {qty} para não fazer save espúrio por diferença de timestamp
+    if(JSON.stringify({qty:val})===_lastSavedStockStr[id])return;
+    // 'at': usa o timestamp da mudança local (se esta sessão modificou) ou o do servidor (preserva);
+    // nunca usa Date.now() como fallback — isso causaria timestamps falsos que "ganhariam" de mudanças reais
+    const at=(d.packagingStockAt||{})[pid]||_pkServerAt[pid]||null;
+    const data=at?{qty:val,at}:{qty:val};
+    rows.push({id,data,updated_at:new Date().toISOString()});
   });
   // Nunca deleta entradas do servidor — apenas upsert de deltas
   // (Deletar causava zeragem de itens inseridos manualmente no banco — v1.3.8)
@@ -868,7 +887,12 @@ async function _saveStockToTable(d){
     method:'POST',headers:{Prefer:'resolution=merge-duplicates'},body:JSON.stringify(rows)
   }).then(r=>{
     if(!r.ok)throw new Error('[TGL] stock upsert HTTP '+r.status);
-    rows.forEach(row=>{_lastSavedStockStr[row.id]=JSON.stringify(row.data);});
+    rows.forEach(row=>{
+      // Baseline PK: apenas {qty}; P/RM: JSON completo
+      _lastSavedStockStr[row.id]=row.id.startsWith('PK:')?JSON.stringify({qty:row.data.qty}):JSON.stringify(row.data);
+      // Atualiza cache de at do servidor para PK
+      if(row.id.startsWith('PK:')&&row.data.at)_pkServerAt[row.id.slice(3)]=row.data.at;
+    });
   });
 }
 
@@ -1001,7 +1025,8 @@ async function loadDB(){
     // Estoque
     const _stockHasData=stockLoaded&&(Object.keys(stockLoaded.stock).length||Object.keys(stockLoaded.rawMaterialStock).length||Object.keys(stockLoaded.packagingStock).length);
     if(_stockHasData){
-      _db.stock=stockLoaded.stock;_db.rawMaterialStock=stockLoaded.rawMaterialStock;_db.packagingStock=stockLoaded.packagingStock;
+      _db.stock=stockLoaded.stock;_db.rawMaterialStock=stockLoaded.rawMaterialStock;_db.packagingStock=stockLoaded.packagingStock;_db.packagingStockAt=stockLoaded.packagingStockAt||{};
+      // _pkServerAt já foi populado dentro de _loadStock — não precisa refazer aqui
     }else if(stockLoaded!==null){
       const _has=Object.keys(_db.stock||{}).length||Object.keys(_db.rawMaterialStock||{}).length||Object.keys(_db.packagingStock||{}).length;
       if(_has){console.log('[TGL] Migrando estoque…');await _saveStockToTable(_db);}
@@ -1124,7 +1149,7 @@ async function saveDBRemote(d){
   setSyncBadge(null);
   while(_saveQueue){
     // Separa: tudo que vai para tabelas dedicadas sai do blob
-    const {auditLog:_al,ops:_opsArr,stock:_stk,rawMaterialStock:_rmStk,packagingStock:_pkStk,rawMaterialMovements:_rmMovs,packagingMovements:_pkMovs,products:_prods,clients:_clis,rawMaterials:_rms,packaging:_packs,suppliers:_supps,users:_usrs,...blobPayload}=_saveQueue;
+    const {auditLog:_al,ops:_opsArr,stock:_stk,rawMaterialStock:_rmStk,packagingStock:_pkStk,packagingStockAt:_pkStockAt,rawMaterialMovements:_rmMovs,packagingMovements:_pkMovs,products:_prods,clients:_clis,rawMaterials:_rms,packaging:_packs,suppliers:_supps,users:_usrs,...blobPayload}=_saveQueue;
     const opsToSave=_opsArr||[];
     _saveQueue=null;
     let attempt=0,success=false;
@@ -1136,7 +1161,7 @@ async function saveDBRemote(d){
           _sf('/rest/v1/rpc/merge_app_data',{method:'POST',
             body:JSON.stringify({p_key:'tgl_v3',p_local:{...blobPayload,ops:[],stock:{},rawMaterialStock:{},packagingStock:{},rawMaterialMovements:[],packagingMovements:[],products:[],clients:[],rawMaterials:[],packaging:[],suppliers:[],users:[]}})}),
           _saveOpsToTable(opsToSave).catch(e=>console.warn('[TGL] ops save warn:',e)),
-          _saveStockToTable({stock:_stk||{},rawMaterialStock:_rmStk||{},packagingStock:_pkStk||{}}).catch(e=>console.warn('[TGL] stock save warn:',e)),
+          _saveStockToTable({stock:_stk||{},rawMaterialStock:_rmStk||{},packagingStock:_pkStk||{},packagingStockAt:_pkStockAt||{}}).catch(e=>console.warn('[TGL] stock save warn:',e)),
           _saveMovementsToTable({rawMaterialMovements:_rmMovs||[],packagingMovements:_pkMovs||[]}).catch(e=>console.warn('[TGL] movements save warn:',e)),
           _saveEntityTable(_PROD_TABLE,_prods||[],_lastSavedProdStr).catch(e=>console.warn('[TGL] products save warn:',e)),
           _saveEntityTable(_CLI_TABLE,_clis||[],_lastSavedCliStr).catch(e=>console.warn('[TGL] clients save warn:',e)),
@@ -1153,6 +1178,7 @@ async function saveDBRemote(d){
           merged.stock=_db.stock;
           merged.rawMaterialStock=_db.rawMaterialStock;
           merged.packagingStock=_db.packagingStock;
+          merged.packagingStockAt=_db.packagingStockAt;
           merged.rawMaterialMovements=_db.rawMaterialMovements;
           merged.packagingMovements=_db.packagingMovements;
           merged.products=_db.products;
@@ -1993,16 +2019,24 @@ async function refreshDashboard(){
             else if(id.startsWith('RM:'))nrm[id.slice(3)]=data;
             else if(id.startsWith('PK:')){
               const pid=id.slice(3);
-              npk[pid]=data&&typeof data==='object'&&'qty' in data?data.qty:data;
-              if(data&&data.at)npkAt[pid]=data.at;
+              const qty=data&&typeof data==='object'&&'qty' in data?data.qty:data;
+              npk[pid]=qty;
+              if(data&&data.at){npkAt[pid]=data.at;_pkServerAt[pid]=data.at;}
             }
           });
           // Só substitui estoque local se não há save em andamento —
           // evita que dados stale do servidor revertam um despacho que acabou de ser salvo
           if(!_saveInProgress&&!_saveQueue&&!_failedPayload){
             freshStock=ns;freshRm=nrm;freshPk=npk;freshPkAt=npkAt;
-            // Sincroniza baseline para que o heartbeat não re-salve os dados do servidor como alteração local
-            srows.forEach(({id,data})=>{_lastSavedStockStr[id]=JSON.stringify(data);});
+            // Sincroniza baseline (formato {qty} para PK) para que o heartbeat não re-salve desnecessariamente
+            srows.forEach(({id,data})=>{
+              if(id.startsWith('PK:')){
+                const qty=data&&typeof data==='object'&&'qty' in data?data.qty:data;
+                _lastSavedStockStr[id]=JSON.stringify({qty});
+              }else{
+                _lastSavedStockStr[id]=JSON.stringify(data);
+              }
+            });
           }
         }
         _db={...idb(),...rows[0].data,
@@ -4985,13 +5019,17 @@ function closeGSearch(){
             const dqty=data&&typeof data==='object'&&'qty' in data?data.qty:data;
             const serverAt=data&&typeof data==='object'&&data.at?data.at:null;
             const localAt=(_db.packagingStockAt||{})[pid]||null;
+            // Baseline PK usa formato {qty} para comparação consistente com _saveStockToTable
             const localWins=(_lastSavedStockStr[id]&&JSON.stringify({qty:localVal})!==_lastSavedStockStr[id])||(localAt&&serverAt&&localAt>serverAt);
             npk[pid]=localWins?localVal:dqty;
-            npkAt[pid]=localWins?(localAt||Date.now()):(serverAt||Date.now());
-            _pendingStockBase[id]=JSON.stringify({qty:dqty,at:serverAt||Date.now()});
+            npkAt[pid]=localWins?(localAt||_pkServerAt[pid]||0):(serverAt||0);
+            if(!localWins&&serverAt)_pkServerAt[pid]=serverAt; // atualiza cache com at do servidor
+            _pendingStockBase[id]=JSON.stringify({qty:localWins?localVal:dqty}); // formato {qty} apenas
           }
         });
-        mergedStock=ns;mergedRmStock=nrm;mergedPkStock=npk;mergedPkStockAt=npkAt;
+        mergedStock=ns;mergedRmStock=nrm;mergedPkStock=npk;
+        // Preserva itens locais-only (não confirmados no servidor) via merge, sobrescreve com dados do servidor para o resto
+        mergedPkStockAt={...(_db.packagingStockAt||{}),...npkAt};
       }
 
       // ── Merge Movimentos ──────────────────────────────────────────────────────
