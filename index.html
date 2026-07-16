@@ -582,8 +582,13 @@ const SUPA_KEY='sb_publishable_yyFwUYtK5D24yeAsd6jkjQ_UuizdNAA';
 const _AUDIT_KEY='tgl_v3_audit'; // linha separada no banco para o log de auditoria (legado)
 const _AUDIT_TABLE='tgl_audit_log'; // tabela dedicada — INSERT atômico por evento
 let _auditLog=[];                     // mantido em memória; nunca entra no payload principal
-const APP_VERSION='1.4.4';
+const APP_VERSION='1.4.5';
 const APP_CHANGELOG={
+  '1.4.5':[
+    'Proteção de timestamp em estoque de MP e Embalagens: valor local mais recente nunca é sobrescrito por dado antigo do servidor',
+    'Busca/filtro por código ou nome nas abas Matéria-Prima e Embalagens de Suprimentos',
+    'Histórico padronizado para MP e Embalagens: botão 🕐 abre modal com total de entradas, saídas e saldo atual',
+  ],
   '1.4.4':[
     'Merge de produtos duplicados: botão "🔀 Duplicatas" na aba Produtos transfere referências de OPs e estoque antes de remover o duplicado',
   ],
@@ -827,13 +832,17 @@ async function _loadStock(){
   const rows=await r.json();
   _lastSavedStockStr={};
   rows.forEach(row=>{_lastSavedStockStr[row.id]=JSON.stringify(row.data);});
-  const stock={},rmStock={},pkStock={};
+  const stock={},rmStock={},pkStock={},pkStockAt={};
   rows.forEach(({id,data})=>{
     if(id.startsWith('P:'))stock[id.slice(2)]=data;
     else if(id.startsWith('RM:'))rmStock[id.slice(3)]=data;
-    else if(id.startsWith('PK:')){pkStock[id.slice(3)]=data&&typeof data==='object'&&'qty' in data?data.qty:data;}
+    else if(id.startsWith('PK:')){
+      const pid=id.slice(3);
+      pkStock[pid]=data&&typeof data==='object'&&'qty' in data?data.qty:data;
+      if(data&&data.at)pkStockAt[pid]=data.at;
+    }
   });
-  return {stock,rawMaterialStock:rmStock,packagingStock:pkStock};
+  return {stock,rawMaterialStock:rmStock,packagingStock:pkStock,packagingStockAt:pkStockAt};
 }
 async function _saveStockToTable(d){
   const rows=[];
@@ -848,7 +857,8 @@ async function _saveStockToTable(d){
   });
   Object.entries(d.packagingStock||{}).forEach(([pid,val])=>{
     const id='PK:'+pid;currentKeys.add(id);
-    const data={qty:val};
+    const at=(d.packagingStockAt||{})[pid]||Date.now();
+    const data={qty:val,at};
     if(JSON.stringify(data)!==_lastSavedStockStr[id])rows.push({id,data,updated_at:new Date().toISOString()});
   });
   // Nunca deleta entradas do servidor — apenas upsert de deltas
@@ -1975,18 +1985,22 @@ async function refreshDashboard(){
         let freshOps=_db.ops||[];
         if(opsRes.ok){const opsRows=await opsRes.json();freshOps=opsRows.map(r=>r.data);}
         // Reconstrói estoque a partir da tabela dedicada
-        let freshStock=_db.stock||{},freshRm=_db.rawMaterialStock||{},freshPk=_db.packagingStock||{};
+        let freshStock=_db.stock||{},freshRm=_db.rawMaterialStock||{},freshPk=_db.packagingStock||{},freshPkAt=_db.packagingStockAt||{};
         if(stockRes.ok){
-          const srows=await stockRes.json();const ns={},nrm={},npk={};
+          const srows=await stockRes.json();const ns={},nrm={},npk={},npkAt={};
           srows.forEach(({id,data})=>{
             if(id.startsWith('P:'))ns[id.slice(2)]=data;
             else if(id.startsWith('RM:'))nrm[id.slice(3)]=data;
-            else if(id.startsWith('PK:')){npk[id.slice(3)]=data&&typeof data==='object'&&'qty' in data?data.qty:data;}
+            else if(id.startsWith('PK:')){
+              const pid=id.slice(3);
+              npk[pid]=data&&typeof data==='object'&&'qty' in data?data.qty:data;
+              if(data&&data.at)npkAt[pid]=data.at;
+            }
           });
           // Só substitui estoque local se não há save em andamento —
           // evita que dados stale do servidor revertam um despacho que acabou de ser salvo
           if(!_saveInProgress&&!_saveQueue&&!_failedPayload){
-            freshStock=ns;freshRm=nrm;freshPk=npk;
+            freshStock=ns;freshRm=nrm;freshPk=npk;freshPkAt=npkAt;
             // Sincroniza baseline para que o heartbeat não re-salve os dados do servidor como alteração local
             srows.forEach(({id,data})=>{_lastSavedStockStr[id]=JSON.stringify(data);});
           }
@@ -1994,7 +2008,7 @@ async function refreshDashboard(){
         _db={...idb(),...rows[0].data,
           products:_db.products||[],clients:_db.clients||[],rawMaterials:_db.rawMaterials||[],
           packaging:_db.packaging||[],suppliers:_db.suppliers||[],users:_db.users||[],
-          ops:freshOps,stock:freshStock,rawMaterialStock:freshRm,packagingStock:freshPk,
+          ops:freshOps,stock:freshStock,rawMaterialStock:freshRm,packagingStock:freshPk,packagingStockAt:freshPkAt,
           rawMaterialMovements:_db.rawMaterialMovements||[],packagingMovements:_db.packagingMovements||[]};
         try{localStorage.setItem('tgl_bk',JSON.stringify(_db));}catch{}
       }
@@ -4940,11 +4954,11 @@ function closeGSearch(){
       // antigo (pré-v1.3.8) apagava o tgl_stock e re-inseria com valor desatualizado, o
       // heartbeat revertia o valor correto local. Agora: se local.at > server.at → local vence,
       // mesmo sem mudança pendente. Garante que o inventário de Isis não seja apagado por outro device.
-      let mergedStock=_db.stock||{},mergedRmStock=_db.rawMaterialStock||{},mergedPkStock=_db.packagingStock||{};
+      let mergedStock=_db.stock||{},mergedRmStock=_db.rawMaterialStock||{},mergedPkStock=_db.packagingStock||{},mergedPkStockAt=_db.packagingStockAt||{};
       const _pendingStockBase={};
       if(stockRes.ok){
         const stockRows=await stockRes.json();
-        const ns={},nrm={},npk={};
+        const ns={},nrm={},npk={},npkAt={};
         // Helper: retorna true se localVal é mais recente que serverData (comparação de timestamp 'at')
         const _localIsNewer=(localVal,serverData)=>{
           const lat=localVal&&typeof localVal==='object'?localVal.at:null;
@@ -4969,12 +4983,15 @@ function closeGSearch(){
             const pid=id.slice(3);
             const localVal=(_db.packagingStock||{})[pid];
             const dqty=data&&typeof data==='object'&&'qty' in data?data.qty:data;
-            const localWins=(_lastSavedStockStr[id]&&JSON.stringify({qty:localVal})!==_lastSavedStockStr[id]);
+            const serverAt=data&&typeof data==='object'&&data.at?data.at:null;
+            const localAt=(_db.packagingStockAt||{})[pid]||null;
+            const localWins=(_lastSavedStockStr[id]&&JSON.stringify({qty:localVal})!==_lastSavedStockStr[id])||(localAt&&serverAt&&localAt>serverAt);
             npk[pid]=localWins?localVal:dqty;
-            _pendingStockBase[id]=JSON.stringify({qty:dqty});
+            npkAt[pid]=localWins?(localAt||Date.now()):(serverAt||Date.now());
+            _pendingStockBase[id]=JSON.stringify({qty:dqty,at:serverAt||Date.now()});
           }
         });
-        mergedStock=ns;mergedRmStock=nrm;mergedPkStock=npk;
+        mergedStock=ns;mergedRmStock=nrm;mergedPkStock=npk;mergedPkStockAt=npkAt;
       }
 
       // ── Merge Movimentos ──────────────────────────────────────────────────────
@@ -4995,7 +5012,7 @@ function closeGSearch(){
       const nd={...idb(),...rows[0].data,
         products:_db.products||[],clients:_db.clients||[],rawMaterials:_db.rawMaterials||[],
         packaging:_db.packaging||[],suppliers:_db.suppliers||[],users:_db.users||[],
-        ops:mergedOps,stock:mergedStock,rawMaterialStock:mergedRmStock,packagingStock:mergedPkStock,rawMaterialMovements:mergedRmMovs,packagingMovements:mergedPkMovs};
+        ops:mergedOps,stock:mergedStock,rawMaterialStock:mergedRmStock,packagingStock:mergedPkStock,packagingStockAt:mergedPkStockAt,rawMaterialMovements:mergedRmMovs,packagingMovements:mergedPkMovs};
       const _gracePassed=(Date.now()-_lastSaveAt)>15000;
       _checkForceLogout(nd);
       if(!S)return;
@@ -5267,18 +5284,26 @@ function _updateRMStock(d,mid,sid,delta){
   s.bySupplier[sid]=(s.bySupplier[sid]||0)+delta;
   if(s.bySupplier[sid]<0)s.bySupplier[sid]=0;
   s.total=Object.values(s.bySupplier).reduce((a,b)=>a+b,0);
+  s.at=Date.now();
 }
 function _setRMStock(d,mid,sid,qty){
   if(!d.rawMaterialStock[mid])d.rawMaterialStock[mid]={total:0,bySupplier:{}};
   const s=d.rawMaterialStock[mid];
   s.bySupplier[sid]=Math.max(0,qty);
   s.total=Object.values(s.bySupplier).reduce((a,b)=>a+b,0);
+  s.at=Date.now();
 }
 function _updatePackStock(d,pid,delta){
   d.packagingStock[pid]=(d.packagingStock[pid]||0)+delta;
   if(d.packagingStock[pid]<0)d.packagingStock[pid]=0;
+  if(!d.packagingStockAt)d.packagingStockAt={};
+  d.packagingStockAt[pid]=Date.now();
 }
-function _setPackStock(d,pid,qty){d.packagingStock[pid]=Math.max(0,qty);}
+function _setPackStock(d,pid,qty){
+  d.packagingStock[pid]=Math.max(0,qty);
+  if(!d.packagingStockAt)d.packagingStockAt={};
+  d.packagingStockAt[pid]=Date.now();
+}
 function _rmHasMovements(d,mid){return(d.rawMaterialMovements||[]).some(m=>m.itemId===mid);}
 function _packHasMovements(d,pid){return(d.packagingMovements||[]).some(m=>m.itemId===pid);}
 
@@ -5498,6 +5523,7 @@ function delEmb(id){
   if(!confirm('Excluir esta embalagem?'))return;
   const d=gdb();d.packaging=d.packaging.filter(x=>x.id!==id);
   delete d.packagingStock[id];
+  if(d.packagingStockAt)delete d.packagingStockAt[id];
   d.packagingMovements=(d.packagingMovements||[]).filter(m=>m.itemId!==id);
   sdb(d);toast('Excluída','ok');_renderEmbTable();
 }
@@ -5812,14 +5838,16 @@ function submitInventarioEmb(pid){
 // ── SUPRIMENTOS: MATÉRIA PRIMA ──────────────────
 // ═══════════════════════════════════════════════
 let _supMPExpanded=null;
+let _supMPFilter='';
 function renderSupMP(){
   const c=el('sup-c');if(!c)return;
-  const d=gdb();
+  _supMPFilter='';
   c.innerHTML='<div class="card"><div class="card-header"><div class="card-title">🌿 Estoque de Matéria-Prima</div>'+
     '<div style="display:flex;gap:6px">'+
     '<button class="btn btn-green btn-sm" onclick="openEntradaMP()">➕ Entrada</button>'+
     '<button class="btn btn-ghost btn-sm" style="color:var(--danger);border-color:rgba(239,68,68,.3)" onclick="openSaidaMP()">➖ Saída</button>'+
     '</div></div>'+
+    '<div style="padding:8px 12px 0"><input type="search" placeholder="🔍 Buscar matéria-prima..." class="inp" style="width:100%;box-sizing:border-box" value="" oninput="_supMPFilter=this.value;_renderSupMPRows(gdb())"></div>'+
     '<div class="tw" id="sup-mp-tbl"></div></div>';
   _renderSupMPTable();
 }
@@ -5837,7 +5865,10 @@ function _renderSupMPTable(){
 }
 function _renderSupMPRows(d){
   const t=el('sup-mp-rows');if(!t)return;
-  t.innerHTML=d.rawMaterials.map(m=>{
+  const _flt=(_supMPFilter||'').toLowerCase().trim();
+  const mats=_flt?d.rawMaterials.filter(m=>(m.name||'').toLowerCase().includes(_flt)||(m.code||'').toLowerCase().includes(_flt)):d.rawMaterials;
+  if(!mats.length){t.innerHTML='<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--muted)">Nenhuma matéria-prima encontrada</td></tr>';return;}
+  t.innerHTML=mats.map(m=>{
     const qty=_rmStockTotal(d,m.id);
     const status=_rmStatus(d,m.id);
     const badge=_stockBadge(status,qty,m.minStock);
@@ -5852,7 +5883,8 @@ function _renderSupMPRows(d){
       '<td style="white-space:nowrap">'+
         '<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openEntradaMP(\''+m.id+'\')">➕</button> '+
         '<button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="event.stopPropagation();openSaidaMP(\''+m.id+'\')">➖</button> '+
-        '<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openInventarioMP(\''+m.id+'\')">📋</button>'+
+        '<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openInventarioMP(\''+m.id+'\')">📋</button> '+
+        '<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openHistoricoMP(\''+m.id+'\')">🕐</button>'+
       '</td></tr>';
     if(isExp){
       const st=d.rawMaterialStock[m.id]||{total:0,bySupplier:{}};
@@ -5888,14 +5920,16 @@ function _toggleMPDrill(mid){_supMPExpanded=(_supMPExpanded===mid)?null:mid;_ren
 // ── SUPRIMENTOS: EMBALAGENS ─────────────────────
 // ═══════════════════════════════════════════════
 let _supEmbExpanded=null;
+let _supEmbFilter='';
 function renderSupEmb(){
   const c=el('sup-c');if(!c)return;
-  const d=gdb();
+  _supEmbFilter='';
   c.innerHTML='<div class="card"><div class="card-header"><div class="card-title">📦 Estoque de Embalagens</div>'+
     '<div style="display:flex;gap:6px">'+
     '<button class="btn btn-green btn-sm" onclick="openEntradaEmb()">➕ Entrada</button>'+
     '<button class="btn btn-ghost btn-sm" style="color:var(--danger);border-color:rgba(239,68,68,.3)" onclick="openSaidaEmb()">➖ Saída</button>'+
     '</div></div>'+
+    '<div style="padding:8px 12px 0"><input type="search" placeholder="🔍 Buscar embalagem..." class="inp" style="width:100%;box-sizing:border-box" value="" oninput="_supEmbFilter=this.value;_renderSupEmbRows(gdb())"></div>'+
     '<div class="tw" id="sup-emb-tbl"></div></div>';
   _renderSupEmbTable();
 }
@@ -5913,7 +5947,10 @@ function _renderSupEmbTable(){
 }
 function _renderSupEmbRows(d){
   const t=el('sup-emb-rows');if(!t)return;
-  t.innerHTML=d.packaging.map(p=>{
+  const _flt=(_supEmbFilter||'').toLowerCase().trim();
+  const packs=_flt?d.packaging.filter(p=>(p.name||'').toLowerCase().includes(_flt)||(p.code||'').toLowerCase().includes(_flt)):d.packaging;
+  if(!packs.length){t.innerHTML='<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--muted)">Nenhuma embalagem encontrada</td></tr>';return;}
+  t.innerHTML=packs.map(p=>{
     const qty=d.packagingStock[p.id]||0;
     const status=_packStatus(d,p.id);
     const badge=_stockBadge(status,qty,p.minStock);
@@ -5928,7 +5965,8 @@ function _renderSupEmbRows(d){
       '<td style="white-space:nowrap">'+
         '<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openEntradaEmb(\''+p.id+'\')">➕</button> '+
         '<button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="event.stopPropagation();openSaidaEmb(\''+p.id+'\')">➖</button> '+
-        '<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openInventarioEmb(\''+p.id+'\')">📋</button>'+
+        '<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openInventarioEmb(\''+p.id+'\')">📋</button> '+
+        '<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openHistoricoEmb(\''+p.id+'\')">🕐</button>'+
       '</td></tr>';
     if(isExp){
       const moves=(d.packagingMovements||[]).filter(mv=>mv.itemId===p.id).slice(-5).reverse();
@@ -5946,6 +5984,166 @@ function _renderSupEmbRows(d){
   }).join('');
 }
 function _toggleEmbDrill(pid){_supEmbExpanded=(_supEmbExpanded===pid)?null:pid;_renderSupEmbRows(gdb());}
+
+// ─── HISTÓRICO MP ────────────────────────────────────────────────────────────
+async function openHistoricoMP(mid){
+  const d=gdb();
+  const m=d.rawMaterials.find(x=>x.id===mid);
+  if(!m){toast('Matéria-prima não encontrada','err');return;}
+  const mname=m.name;
+  const _munit=m.unit||'KG';
+  const stockNow=_rmStockTotal(d,mid);
+  Mopen('🕐 Histórico — '+esc(mname),
+    '<div id="hist-mp-body" style="min-height:120px"><div style="text-align:center;padding:40px;color:var(--muted)">🔄 Carregando histórico...</div></div>',
+    '<button class="btn btn-ghost" onclick="Mclose()">Fechar</button>'
+  );
+  try{
+    const nameQ=encodeURIComponent('*'+mname+'*');
+    const r=await _sf('/rest/v1/'+_AUDIT_TABLE+'?select=*&details=ilike.'+nameQ+'&order=at.desc&limit=300');
+    if(!r.ok){const e2=await r.text();throw new Error(e2);}
+    const rows=await r.json();
+    const mpActions=new Set(['Entrada MP','Saída MP','Inventário MP']);
+    const filtered=rows.filter(row=>mpActions.has(row.action));
+    let totalEnt=0,totalSai=0;
+    let html='';
+    if(!filtered.length){
+      html='<div class="empty"><div class="ei">🕐</div><p>Nenhum histórico encontrado para esta matéria-prima</p></div>';
+    }else{
+      const trs=filtered.map(row=>{
+        const dt=new Date(row.at);
+        const dtStr=dt.toLocaleDateString('pt-BR')+' '+dt.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+        const det=row.details||'';
+        let tipo='',deltaStr='—',cls='color:var(--muted)';
+        if(row.action==='Entrada MP'){
+          const m2=det.match(/\+([0-9.,]+)/);
+          const qty=m2?parseFloat(m2[1].replace(',','.')):null;
+          if(qty!=null)totalEnt+=qty;
+          tipo='Entrada';cls='color:var(--green)';
+          deltaStr=qty!=null?'<span style="'+cls+';font-weight:700">+'+fnum(qty)+' '+_munit+'</span>':'—';
+        }else if(row.action==='Saída MP'){
+          const m2=det.match(/-([0-9.,]+)/);
+          const qty=m2?parseFloat(m2[1].replace(',','.')):null;
+          if(qty!=null)totalSai+=qty;
+          tipo='Saída';cls='color:var(--danger)';
+          deltaStr=qty!=null?'<span style="'+cls+';font-weight:700">-'+fnum(qty)+' '+_munit+'</span>':'—';
+        }else if(row.action==='Inventário MP'){
+          const m2=det.match(/([+-][0-9.,]+)/);
+          const qty=m2?parseFloat(m2[1].replace(',','.')):null;
+          tipo='Inventário';cls='color:var(--accent)';
+          deltaStr=qty!=null?'<span style="'+cls+'">'+(qty>=0?'+':'')+fnum(qty)+' '+_munit+'</span>':'—';
+        }
+        return '<tr>'+
+          '<td style="font-size:12px;white-space:nowrap;color:var(--muted)">'+dtStr+'</td>'+
+          '<td><span style="'+cls+'">'+tipo+'</span></td>'+
+          '<td style="text-align:center">'+deltaStr+'</td>'+
+          '<td style="font-size:12px;color:var(--muted)">'+esc(row.uname||'—')+'</td>'+
+          '</tr>';
+      }).join('');
+      html='<div style="display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap">'+
+        '<div style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.25);border-radius:8px;padding:10px 16px;min-width:100px">'+
+        '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Total entradas</div>'+
+        '<div style="font-size:22px;font-weight:700;color:var(--green)">+'+fnum(totalEnt)+' '+_munit+'</div></div>'+
+        '<div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.25);border-radius:8px;padding:10px 16px;min-width:100px">'+
+        '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Total saídas</div>'+
+        '<div style="font-size:22px;font-weight:700;color:var(--danger)">-'+fnum(totalSai)+' '+_munit+'</div></div>'+
+        '<div style="background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.25);border-radius:8px;padding:10px 16px;min-width:100px">'+
+        '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Saldo atual</div>'+
+        '<div style="font-size:22px;font-weight:700;color:var(--accent)">'+fnum(stockNow)+' '+_munit+'</div></div>'+
+        '</div>'+
+        '<div class="tw" style="max-height:360px;overflow-y:auto">'+
+        '<table><thead><tr>'+
+        '<th>Data/Hora</th><th>Tipo</th><th style="text-align:center">Qtd</th><th>Usuário</th>'+
+        '</tr></thead><tbody>'+trs+'</tbody></table></div>'+
+        '<div style="font-size:11px;color:var(--muted);margin-top:8px">'+filtered.length+' registro(s) encontrado(s)</div>';
+    }
+    const bodyEl=el('hist-mp-body');
+    if(bodyEl)bodyEl.innerHTML=html;
+  }catch(e2){
+    console.error('[TGL] hist-mp erro:',e2);
+    const bodyEl=el('hist-mp-body');
+    if(bodyEl)bodyEl.innerHTML='<div style="color:var(--danger);padding:20px">Erro ao carregar histórico: '+esc(String(e2))+'</div>';
+  }
+}
+
+// ─── HISTÓRICO EMBALAGEM ──────────────────────────────────────────────────────
+async function openHistoricoEmb(pid){
+  const d=gdb();
+  const p=d.packaging.find(x=>x.id===pid);
+  if(!p){toast('Embalagem não encontrada','err');return;}
+  const pname=p.name;
+  const _eunit=p.unit||'UN';
+  const stockNow=d.packagingStock[pid]||0;
+  Mopen('🕐 Histórico — '+esc(pname),
+    '<div id="hist-emb-body" style="min-height:120px"><div style="text-align:center;padding:40px;color:var(--muted)">🔄 Carregando histórico...</div></div>',
+    '<button class="btn btn-ghost" onclick="Mclose()">Fechar</button>'
+  );
+  try{
+    const nameQ=encodeURIComponent('*'+pname+'*');
+    const r=await _sf('/rest/v1/'+_AUDIT_TABLE+'?select=*&details=ilike.'+nameQ+'&order=at.desc&limit=300');
+    if(!r.ok){const e2=await r.text();throw new Error(e2);}
+    const rows=await r.json();
+    const embActions=new Set(['Entrada Embalagem','Saída Embalagem','Inventário Embalagem']);
+    const filtered=rows.filter(row=>embActions.has(row.action));
+    let totalEnt=0,totalSai=0;
+    let html='';
+    if(!filtered.length){
+      html='<div class="empty"><div class="ei">🕐</div><p>Nenhum histórico encontrado para esta embalagem</p></div>';
+    }else{
+      const trs=filtered.map(row=>{
+        const dt=new Date(row.at);
+        const dtStr=dt.toLocaleDateString('pt-BR')+' '+dt.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+        const det=row.details||'';
+        let tipo='',deltaStr='—',cls='color:var(--muted)';
+        if(row.action==='Entrada Embalagem'){
+          const m2=det.match(/\+([0-9.,]+)/);
+          const qty=m2?parseFloat(m2[1].replace(',','.')):null;
+          if(qty!=null)totalEnt+=qty;
+          tipo='Entrada';cls='color:var(--green)';
+          deltaStr=qty!=null?'<span style="'+cls+';font-weight:700">+'+fnum(qty)+' '+_eunit+'</span>':'—';
+        }else if(row.action==='Saída Embalagem'){
+          const m2=det.match(/-([0-9.,]+)/);
+          const qty=m2?parseFloat(m2[1].replace(',','.')):null;
+          if(qty!=null)totalSai+=qty;
+          tipo='Saída';cls='color:var(--danger)';
+          deltaStr=qty!=null?'<span style="'+cls+';font-weight:700">-'+fnum(qty)+' '+_eunit+'</span>':'—';
+        }else if(row.action==='Inventário Embalagem'){
+          const m2=det.match(/([+-][0-9.,]+)/);
+          const qty=m2?parseFloat(m2[1].replace(',','.')):null;
+          tipo='Inventário';cls='color:var(--accent)';
+          deltaStr=qty!=null?'<span style="'+cls+'">'+(qty>=0?'+':'')+fnum(qty)+' '+_eunit+'</span>':'—';
+        }
+        return '<tr>'+
+          '<td style="font-size:12px;white-space:nowrap;color:var(--muted)">'+dtStr+'</td>'+
+          '<td><span style="'+cls+'">'+tipo+'</span></td>'+
+          '<td style="text-align:center">'+deltaStr+'</td>'+
+          '<td style="font-size:12px;color:var(--muted)">'+esc(row.uname||'—')+'</td>'+
+          '</tr>';
+      }).join('');
+      html='<div style="display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap">'+
+        '<div style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.25);border-radius:8px;padding:10px 16px;min-width:100px">'+
+        '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Total entradas</div>'+
+        '<div style="font-size:22px;font-weight:700;color:var(--green)">+'+fnum(totalEnt)+' '+_eunit+'</div></div>'+
+        '<div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.25);border-radius:8px;padding:10px 16px;min-width:100px">'+
+        '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Total saídas</div>'+
+        '<div style="font-size:22px;font-weight:700;color:var(--danger)">-'+fnum(totalSai)+' '+_eunit+'</div></div>'+
+        '<div style="background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.25);border-radius:8px;padding:10px 16px;min-width:100px">'+
+        '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Saldo atual</div>'+
+        '<div style="font-size:22px;font-weight:700;color:var(--accent)">'+fnum(stockNow)+' '+_eunit+'</div></div>'+
+        '</div>'+
+        '<div class="tw" style="max-height:360px;overflow-y:auto">'+
+        '<table><thead><tr>'+
+        '<th>Data/Hora</th><th>Tipo</th><th style="text-align:center">Qtd</th><th>Usuário</th>'+
+        '</tr></thead><tbody>'+trs+'</tbody></table></div>'+
+        '<div style="font-size:11px;color:var(--muted);margin-top:8px">'+filtered.length+' registro(s) encontrado(s)</div>';
+    }
+    const bodyEl=el('hist-emb-body');
+    if(bodyEl)bodyEl.innerHTML=html;
+  }catch(e2){
+    console.error('[TGL] hist-emb erro:',e2);
+    const bodyEl=el('hist-emb-body');
+    if(bodyEl)bodyEl.innerHTML='<div style="color:var(--danger);padding:20px">Erro ao carregar histórico: '+esc(String(e2))+'</div>';
+  }
+}
 
 // ═══════════════════════════════════════════════
 // ── DASHBOARD DO COMPRADOR ──────────────────────
