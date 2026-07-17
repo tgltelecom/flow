@@ -582,8 +582,12 @@ const SUPA_KEY='sb_publishable_yyFwUYtK5D24yeAsd6jkjQ_UuizdNAA';
 const _AUDIT_KEY='tgl_v3_audit'; // linha separada no banco para o log de auditoria (legado)
 const _AUDIT_TABLE='tgl_audit_log'; // tabela dedicada — INSERT atômico por evento
 let _auditLog=[];                     // mantido em memória; nunca entra no payload principal
-const APP_VERSION='1.4.6';
+const APP_VERSION='1.4.7';
 const APP_CHANGELOG={
+  '1.4.7':[
+    'RPCs atômicas para lançamentos de MP e Embalagens: entradas, saídas e inventários agora usam operações atômicas no servidor, eliminando race condition de snapshot entre dispositivos simultâneos',
+    'Correção: ícone duplo nas barras de busca (ícone CSS + emoji no placeholder) — todas as buscas padronizadas no sinput com ícone único via CSS',
+  ],
   '1.4.6':[
     'Correção crítica: estoque de Embalagens (PK) não reverte mais para valores antigos após sincronização automática',
     'Correção: baseline de comparação PK unificado em formato {qty} — elimina falso-positivo que forçava re-save de todos itens a cada heartbeat',
@@ -3724,7 +3728,7 @@ function renderEstoque(){
     '<button class="btn btn-green btn-sm" onclick="openLancamento()">➕ Lançamento</button>'+
     '</div></div>'+
     '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">'+
-    '<input class="sinput" id="srch-est" placeholder="🔍 Buscar produto..." oninput="renderEstoque()" value="'+esc(qSaved)+'" style="width:260px">'+
+    '<input class="sinput" id="srch-est" placeholder="Buscar produto..." oninput="renderEstoque()" value="'+esc(qSaved)+'" style="width:260px">'+
     '<div style="display:flex;gap:4px;flex-wrap:wrap">'+
     '<button class="'+fBtnCls('')+'" onclick="setSupFilter(\x27\x27)">Todos</button>'+
     '<button class="'+fBtnCls('g')+'" style="display:flex;align-items:center;gap:5px" onclick="setSupFilter(\x27g\x27)"><span class="sem-dot" style="background:#22c55e;flex-shrink:0"></span>Atende</button>'+
@@ -4362,7 +4366,7 @@ function renderExp(){
     const isEmpty=!d.ops.filter(o=>!o.archived).length;
     ec.innerHTML='<div class="card">'+
       '<div class="card-header"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+
-      '<input class="sinput" id="srch-exp" placeholder="🔍 Pedido, cliente ou transportadora..." oninput="renderExp()" value="'+esc(qSavedExp)+'" style="width:260px">'+
+      '<input class="sinput" id="srch-exp" placeholder="Pedido, cliente ou transportadora..." oninput="renderExp()" value="'+esc(qSavedExp)+'" style="width:260px">'+
       '<select class="sselect" id="filt-exp-st" onchange="renderExp()">'+
       '<option value="">Todos</option>'+
       '<option value="ativo" '+(stFiltExp==='ativo'?'selected':'')+'>Ativos</option>'+
@@ -4384,7 +4388,7 @@ function renderExp(){
   }
   ec.innerHTML='<div class="card">'+
     '<div class="card-header"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+
-    '<input class="sinput" id="srch-exp" placeholder="🔍 Pedido, cliente ou transportadora..." oninput="renderExp()" value="'+esc(qSavedExp)+'" style="width:260px">'+
+    '<input class="sinput" id="srch-exp" placeholder="Pedido, cliente ou transportadora..." oninput="renderExp()" value="'+esc(qSavedExp)+'" style="width:260px">'+
     '<select class="sselect" id="filt-exp-st" onchange="renderExp()">'+
     '<option value="">Todos</option>'+
     '<option value="ativo" '+(stFiltExp==='ativo'?'selected':'')+'>Ativos</option>'+
@@ -5345,6 +5349,48 @@ function _setPackStock(d,pid,qty){
 function _rmHasMovements(d,mid){return(d.rawMaterialMovements||[]).some(m=>m.itemId===mid);}
 function _packHasMovements(d,pid){return(d.packagingMovements||[]).some(m=>m.itemId===pid);}
 
+// ─── RPCs atômicas de estoque (evita race condition de snapshot) ───
+// PK (Embalagem): delta (+ entrada, - saída)
+async function _rpcPKAdjust(pid,delta){
+  const at=Date.now();
+  const r=await _sf('/rest/v1/rpc/adjust_pk_stock_dev',{method:'POST',body:JSON.stringify({p_id:'PK:'+pid,p_delta:delta,p_at:at})});
+  if(!r.ok)throw new Error((await r.text())||'Erro ao salvar estoque de embalagem');
+  const nd=await r.json();
+  const d=gdb();d.packagingStock[pid]=nd.qty;
+  if(!d.packagingStockAt)d.packagingStockAt={};
+  d.packagingStockAt[pid]=nd.at;_pkServerAt[pid]=nd.at;
+  _lastSavedStockStr['PK:'+pid]=JSON.stringify({qty:nd.qty});
+}
+// PK (Embalagem): set absoluto (inventário)
+async function _rpcPKSet(pid,qty){
+  const at=Date.now();
+  const r=await _sf('/rest/v1/rpc/set_pk_stock_dev',{method:'POST',body:JSON.stringify({p_id:'PK:'+pid,p_qty:qty,p_at:at})});
+  if(!r.ok)throw new Error((await r.text())||'Erro ao salvar inventário de embalagem');
+  const nd=await r.json();
+  const d=gdb();d.packagingStock[pid]=nd.qty;
+  if(!d.packagingStockAt)d.packagingStockAt={};
+  d.packagingStockAt[pid]=nd.at;_pkServerAt[pid]=nd.at;
+  _lastSavedStockStr['PK:'+pid]=JSON.stringify({qty:nd.qty});
+}
+// RM (Matéria-Prima): delta por fornecedor
+async function _rpcRMAdjust(mid,sid,delta){
+  const at=Date.now();
+  const r=await _sf('/rest/v1/rpc/adjust_rm_stock_dev',{method:'POST',body:JSON.stringify({p_id:'RM:'+mid,p_supplier_id:sid,p_delta:delta,p_at:at})});
+  if(!r.ok)throw new Error((await r.text())||'Erro ao salvar estoque de matéria-prima');
+  const nd=await r.json();
+  const d=gdb();d.rawMaterialStock[mid]=nd;
+  _lastSavedStockStr['RM:'+mid]=JSON.stringify(nd);
+}
+// RM (Matéria-Prima): set absoluto por fornecedor (inventário)
+async function _rpcRMSet(mid,sid,qty){
+  const at=Date.now();
+  const r=await _sf('/rest/v1/rpc/set_rm_stock_dev',{method:'POST',body:JSON.stringify({p_id:'RM:'+mid,p_supplier_id:sid,p_qty:qty,p_at:at})});
+  if(!r.ok)throw new Error((await r.text())||'Erro ao salvar inventário de matéria-prima');
+  const nd=await r.json();
+  const d=gdb();d.rawMaterialStock[mid]=nd;
+  _lastSavedStockStr['RM:'+mid]=JSON.stringify(nd);
+}
+
 // ─── STATUS DE ESTOQUE (para semáforo) ───
 // retorna: 'zero' | 'abaixo' | 'proximo' | 'ok' | 'sem_lancamento'
 function _rmStatus(d,mid){
@@ -5397,7 +5443,7 @@ function tabCadMP(){
     '<div class="card-header"><div class="card-title">🌿 Matérias-Primas Cadastradas</div>'+
     '<button class="btn btn-green btn-sm" onclick="openRMForm()">+ Nova Matéria-Prima</button></div>'+
     '<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">'+
-    '<input class="sinput" id="rm-srch" placeholder="🔍 Buscar por código ou nome..." oninput="_filterRMTable()" style="flex:1;min-width:180px;max-width:320px">'+
+    '<input class="sinput" id="rm-srch" placeholder="Buscar por código ou nome..." oninput="_filterRMTable()" style="flex:1;min-width:180px;max-width:320px">'+
     '<select class="sselect" id="rm-flt-setor" onchange="_filterRMTable()"><option value="">Todos os setores</option>'+_SETORES.map(s=>'<option value="'+s.v+'">'+s.l+'</option>').join('')+'</select>'+
     '</div>'+
     '<div class="tw" id="rm-tbl"></div></div>';
@@ -5488,7 +5534,7 @@ function tabCadEmb(){
     '<div class="card-header"><div class="card-title">📦 Embalagens Cadastradas</div>'+
     '<button class="btn btn-green btn-sm" onclick="openEmbForm()">+ Nova Embalagem</button></div>'+
     '<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">'+
-    '<input class="sinput" id="emb-srch" placeholder="🔍 Buscar por código ou nome..." oninput="_filterEmbTable()" style="flex:1;min-width:180px;max-width:320px">'+
+    '<input class="sinput" id="emb-srch" placeholder="Buscar por código ou nome..." oninput="_filterEmbTable()" style="flex:1;min-width:180px;max-width:320px">'+
     '<select class="sselect" id="emb-flt-setor" onchange="_filterEmbTable()"><option value="">Todos os setores</option>'+_SETORES.map(s=>'<option value="'+s.v+'">'+s.l+'</option>').join('')+'</select>'+
     '</div>'+
     '<div class="tw" id="emb-tbl"></div></div>';
@@ -5660,9 +5706,9 @@ function openEntradaMP(mid){
     '<button class="btn btn-green" onclick="submitEntradaMP()">✅ Confirmar Entrada</button>'
   );
 }
-function submitEntradaMP(){
-  const d=gdb();
+async function submitEntradaMP(){
   const mid=v('mv-item'),nf=v('mv-nf').trim(),date=v('mv-date'),obs=v('mv-obs').trim();
+  const d=gdb();
   const sid=_getSuppId(true);if(sid===null)return;
   const _rm=d.rawMaterials.find(x=>x.id===mid);const _unit=_rm?_rm.unit||'KG':'KG';
   const qty=_parseQty(v('mv-qty'),_unit);
@@ -5670,12 +5716,16 @@ function submitEntradaMP(){
   if(qty<=0){toast('Quantidade deve ser maior que zero','err');return;}
   if(!nf){toast('Informe o número da nota fiscal','err');return;}
   if(!date){toast('Informe a data','err');return;}
-  _updateRMStock(d,mid,sid,qty);
-  if(!d.rawMaterialMovements)d.rawMaterialMovements=[];
-  d.rawMaterialMovements.push({id:_nid(),type:'entrada',itemId:mid,supplierId:sid,qty,nfNum:nf,date,obs,createdAt:Date.now(),createdBy:S?S.name:''});
-  logAction(d,'Entrada MP',_rmName(d,mid)+' +'+fqty(qty,_unit)+' '+_unit);
-  sdb(d);Mclose();toast('Entrada registrada!','ok');
-  if(el('sup-mp-tbl'))_renderSupMPTable();
+  Mclose();
+  try{
+    await _rpcRMAdjust(mid,sid,qty);
+    const d2=gdb();
+    if(!d2.rawMaterialMovements)d2.rawMaterialMovements=[];
+    d2.rawMaterialMovements.push({id:_nid(),type:'entrada',itemId:mid,supplierId:sid,qty,nfNum:nf,date,obs,createdAt:Date.now(),createdBy:S?S.name:''});
+    logAction(d2,'Entrada MP',_rmName(d2,mid)+' +'+fqty(qty,_unit)+' '+_unit);
+    sdb(d2);toast('Entrada registrada!','ok');
+    if(el('sup-mp-tbl'))_renderSupMPTable();
+  }catch(e){toast('Erro ao registrar entrada: '+e.message,'err');}
 }
 
 function openSaidaMP(mid){
@@ -5707,9 +5757,9 @@ function _updateSuppSaida(forceMid){
       return'<option value="'+sid+'">'+esc(sup?sup.name:sid)+' ('+fqty(q,_unit)+' '+_unit+')</option>';
     }).join('');
 }
-function submitSaidaMP(){
-  const d=gdb();
+async function submitSaidaMP(){
   const mid=v('mv-item'),sid=v('mv-supp'),req=v('mv-req').trim(),date=v('mv-date'),obs=v('mv-obs').trim();
+  const d=gdb();
   const _rm=d.rawMaterials.find(x=>x.id===mid);const _unit=_rm?_rm.unit||'KG':'KG';
   const qty=_parseQty(v('mv-qty'),_unit);
   if(!mid){toast('Selecione o produto','err');return;}
@@ -5718,12 +5768,16 @@ function submitSaidaMP(){
   if(!req){toast('Informe o número da requisição','err');return;}
   const disp=_rmStockBySupp(d,mid,sid);
   if(qty>disp){toast('Estoque insuficiente para este fornecedor ('+fqty(disp,_unit)+' '+_unit+' disponíveis)','err');return;}
-  _updateRMStock(d,mid,sid,-qty);
-  if(!d.rawMaterialMovements)d.rawMaterialMovements=[];
-  d.rawMaterialMovements.push({id:_nid(),type:'saida',itemId:mid,supplierId:sid,qty,reqNum:req,date,obs,createdAt:Date.now(),createdBy:S?S.name:''});
-  logAction(d,'Saída MP',_rmName(d,mid)+' -'+fqty(qty,_unit)+' '+_unit);
-  sdb(d);Mclose();toast('Saída registrada!','ok');
-  if(el('sup-mp-tbl'))_renderSupMPTable();
+  Mclose();
+  try{
+    await _rpcRMAdjust(mid,sid,-qty);
+    const d2=gdb();
+    if(!d2.rawMaterialMovements)d2.rawMaterialMovements=[];
+    d2.rawMaterialMovements.push({id:_nid(),type:'saida',itemId:mid,supplierId:sid,qty,reqNum:req,date,obs,createdAt:Date.now(),createdBy:S?S.name:''});
+    logAction(d2,'Saída MP',_rmName(d2,mid)+' -'+fqty(qty,_unit)+' '+_unit);
+    sdb(d2);toast('Saída registrada!','ok');
+    if(el('sup-mp-tbl'))_renderSupMPTable();
+  }catch(e){toast('Erro ao registrar saída: '+e.message,'err');}
 }
 
 function openInventarioMP(mid){
@@ -5749,20 +5803,25 @@ function openInventarioMP(mid){
     '<button class="btn btn-green" onclick="submitInventarioMP(\''+mid+'\')">✅ Confirmar Inventário</button>'
   );
 }
-function submitInventarioMP(mid){
+async function submitInventarioMP(mid){
   const d=gdb();
   const _rm=d.rawMaterials.find(x=>x.id===mid);const _unit=_rm?_rm.unit||'KG':'KG';
   const sid=_getSuppId(true);if(sid===null)return;
   const qty=_parseQty(v('mv-qty'),_unit);
+  const date=v('mv-date'),obs=v('mv-obs').trim();
   if(isNaN(qty)||qty<0){toast('Quantidade inválida','err');return;}
   const antes=_rmStockBySupp(d,mid,sid);
   const delta=qty-antes;
-  _setRMStock(d,mid,sid,qty);
-  if(!d.rawMaterialMovements)d.rawMaterialMovements=[];
-  d.rawMaterialMovements.push({id:_nid(),type:'inventario',itemId:mid,supplierId:sid,qty,delta,date:v('mv-date'),obs:v('mv-obs').trim(),createdAt:Date.now(),createdBy:S?S.name:''});
-  logAction(d,'Inventário MP',_rmName(d,mid)+' ajuste: '+(delta>=0?'+':'')+fqty(delta,_unit)+' '+_unit);
-  sdb(d);Mclose();toast('Inventário registrado (ajuste '+(delta>=0?'+':'')+fqty(delta,_unit)+' '+_unit+')','ok');
-  if(el('sup-mp-tbl'))_renderSupMPTable();
+  Mclose();
+  try{
+    await _rpcRMSet(mid,sid,qty);
+    const d2=gdb();
+    if(!d2.rawMaterialMovements)d2.rawMaterialMovements=[];
+    d2.rawMaterialMovements.push({id:_nid(),type:'inventario',itemId:mid,supplierId:sid,qty,delta,date,obs,createdAt:Date.now(),createdBy:S?S.name:''});
+    logAction(d2,'Inventário MP',_rmName(d2,mid)+' ajuste: '+(delta>=0?'+':'')+fqty(delta,_unit)+' '+_unit);
+    sdb(d2);toast('Inventário registrado (ajuste '+(delta>=0?'+':'')+fqty(delta,_unit)+' '+_unit+')','ok');
+    if(el('sup-mp-tbl'))_renderSupMPTable();
+  }catch(e){toast('Erro ao registrar inventário: '+e.message,'err');}
 }
 
 // ─── MP: helper de nome ───
@@ -5790,21 +5849,25 @@ function openEntradaEmb(pid){
     '<button class="btn btn-green" onclick="submitEntradaEmb()">✅ Confirmar Entrada</button>'
   );
 }
-function submitEntradaEmb(){
-  const d=gdb();
+async function submitEntradaEmb(){
   const pid=v('mv-item'),nf=v('mv-nf').trim(),date=v('mv-date'),obs=v('mv-obs').trim();
+  const d=gdb();
   const sid=_getSuppId(false);// fornecedor é opcional em embalagens
   const _emb=d.packaging.find(x=>x.id===pid);const _unit=_emb?_emb.unit||'UN':'UN';
   const qty=_parseQty(v('mv-qty'),_unit);
   if(!pid){toast('Selecione a embalagem','err');return;}
   if(qty<=0){toast('Quantidade deve ser maior que zero','err');return;}
   if(!nf){toast('Informe o número da nota fiscal','err');return;}
-  _updatePackStock(d,pid,qty);
-  if(!d.packagingMovements)d.packagingMovements=[];
-  d.packagingMovements.push({id:_nid(),type:'entrada',itemId:pid,supplierId:sid||null,qty,nfNum:nf,date,obs,createdAt:Date.now(),createdBy:S?S.name:''});
-  logAction(d,'Entrada Embalagem',(_emb?_emb.name:pid)+' +'+fqty(qty,_unit)+' '+_unit);
-  sdb(d);Mclose();toast('Entrada registrada!','ok');
-  if(el('sup-emb-tbl'))_renderSupEmbTable();
+  Mclose();
+  try{
+    await _rpcPKAdjust(pid,qty);
+    const d2=gdb();
+    if(!d2.packagingMovements)d2.packagingMovements=[];
+    d2.packagingMovements.push({id:_nid(),type:'entrada',itemId:pid,supplierId:sid||null,qty,nfNum:nf,date,obs,createdAt:Date.now(),createdBy:S?S.name:''});
+    logAction(d2,'Entrada Embalagem',(_emb?_emb.name:pid)+' +'+fqty(qty,_unit)+' '+_unit);
+    sdb(d2);toast('Entrada registrada!','ok');
+    if(el('sup-emb-tbl'))_renderSupEmbTable();
+  }catch(e){toast('Erro ao registrar entrada: '+e.message,'err');}
 }
 function openSaidaEmb(pid){
   const d=gdb();
@@ -5824,9 +5887,9 @@ function openSaidaEmb(pid){
     '<button class="btn btn-danger" onclick="submitSaidaEmb()">✅ Confirmar Saída</button>'
   );
 }
-function submitSaidaEmb(){
-  const d=gdb();
+async function submitSaidaEmb(){
   const pid=v('mv-item'),req=v('mv-req').trim(),date=v('mv-date'),obs=v('mv-obs').trim();
+  const d=gdb();
   const _emb=d.packaging.find(x=>x.id===pid);const _unit=_emb?_emb.unit||'UN':'UN';
   const qty=_parseQty(v('mv-qty'),_unit);
   if(!pid){toast('Selecione a embalagem','err');return;}
@@ -5834,12 +5897,16 @@ function submitSaidaEmb(){
   if(!req){toast('Informe o número da requisição','err');return;}
   const disp=d.packagingStock[pid]||0;
   if(qty>disp){toast('Estoque insuficiente ('+fqty(disp,_unit)+' '+_unit+' disponíveis)','err');return;}
-  _updatePackStock(d,pid,-qty);
-  if(!d.packagingMovements)d.packagingMovements=[];
-  d.packagingMovements.push({id:_nid(),type:'saida',itemId:pid,qty,reqNum:req,date,obs,createdAt:Date.now(),createdBy:S?S.name:''});
-  logAction(d,'Saída Embalagem',(_emb?_emb.name:pid)+' -'+fqty(qty,_unit)+' '+_unit);
-  sdb(d);Mclose();toast('Saída registrada!','ok');
-  if(el('sup-emb-tbl'))_renderSupEmbTable();
+  Mclose();
+  try{
+    await _rpcPKAdjust(pid,-qty);
+    const d2=gdb();
+    if(!d2.packagingMovements)d2.packagingMovements=[];
+    d2.packagingMovements.push({id:_nid(),type:'saida',itemId:pid,qty,reqNum:req,date,obs,createdAt:Date.now(),createdBy:S?S.name:''});
+    logAction(d2,'Saída Embalagem',(_emb?_emb.name:pid)+' -'+fqty(qty,_unit)+' '+_unit);
+    sdb(d2);toast('Saída registrada!','ok');
+    if(el('sup-emb-tbl'))_renderSupEmbTable();
+  }catch(e){toast('Erro ao registrar saída: '+e.message,'err');}
 }
 function openInventarioEmb(pid){
   const d=gdb();
@@ -5857,19 +5924,24 @@ function openInventarioEmb(pid){
     '<button class="btn btn-green" onclick="submitInventarioEmb(\''+pid+'\')">✅ Confirmar Inventário</button>'
   );
 }
-function submitInventarioEmb(pid){
+async function submitInventarioEmb(pid){
   const d=gdb();
   const _emb=d.packaging.find(x=>x.id===pid);const _unit=_emb?_emb.unit||'UN':'UN';
   const qty=_parseQty(v('mv-qty'),_unit);
+  const date=v('mv-date'),obs=v('mv-obs').trim();
   if(isNaN(qty)||qty<0){toast('Quantidade inválida','err');return;}
   const antes=d.packagingStock[pid]||0;
   const delta=qty-antes;
-  _setPackStock(d,pid,qty);
-  if(!d.packagingMovements)d.packagingMovements=[];
-  d.packagingMovements.push({id:_nid(),type:'inventario',itemId:pid,qty,delta,date:v('mv-date'),obs:v('mv-obs').trim(),createdAt:Date.now(),createdBy:S?S.name:''});
-  logAction(d,'Inventário Embalagem',(_emb?_emb.name:pid)+' ajuste: '+(delta>=0?'+':'')+fqty(delta,_unit)+' '+_unit);
-  sdb(d);Mclose();toast('Inventário registrado (ajuste '+(delta>=0?'+':'')+fqty(delta,_unit)+' '+_unit+')','ok');
-  if(el('sup-emb-tbl'))_renderSupEmbTable();
+  Mclose();
+  try{
+    await _rpcPKSet(pid,qty);
+    const d2=gdb();
+    if(!d2.packagingMovements)d2.packagingMovements=[];
+    d2.packagingMovements.push({id:_nid(),type:'inventario',itemId:pid,qty,delta,date,obs,createdAt:Date.now(),createdBy:S?S.name:''});
+    logAction(d2,'Inventário Embalagem',(_emb?_emb.name:pid)+' ajuste: '+(delta>=0?'+':'')+fqty(delta,_unit)+' '+_unit);
+    sdb(d2);toast('Inventário registrado (ajuste '+(delta>=0?'+':'')+fqty(delta,_unit)+' '+_unit+')','ok');
+    if(el('sup-emb-tbl'))_renderSupEmbTable();
+  }catch(e){toast('Erro ao registrar inventário: '+e.message,'err');}
 }
 
 // ═══════════════════════════════════════════════
@@ -5885,7 +5957,7 @@ function renderSupMP(){
     '<button class="btn btn-green btn-sm" onclick="openEntradaMP()">➕ Entrada</button>'+
     '<button class="btn btn-ghost btn-sm" style="color:var(--danger);border-color:rgba(239,68,68,.3)" onclick="openSaidaMP()">➖ Saída</button>'+
     '</div></div>'+
-    '<div style="padding:8px 12px 0"><input type="search" placeholder="🔍 Buscar matéria-prima..." class="inp" style="width:100%;box-sizing:border-box" value="" oninput="_supMPFilter=this.value;_renderSupMPRows(gdb())"></div>'+
+    '<div style="padding:8px 12px 0"><input type="text" placeholder="Buscar matéria-prima..." class="sinput" style="width:100%;box-sizing:border-box" value="" oninput="_supMPFilter=this.value;_renderSupMPRows(gdb())"></div>'+
     '<div class="tw" id="sup-mp-tbl"></div></div>';
   _renderSupMPTable();
 }
@@ -5967,7 +6039,7 @@ function renderSupEmb(){
     '<button class="btn btn-green btn-sm" onclick="openEntradaEmb()">➕ Entrada</button>'+
     '<button class="btn btn-ghost btn-sm" style="color:var(--danger);border-color:rgba(239,68,68,.3)" onclick="openSaidaEmb()">➖ Saída</button>'+
     '</div></div>'+
-    '<div style="padding:8px 12px 0"><input type="search" placeholder="🔍 Buscar embalagem..." class="inp" style="width:100%;box-sizing:border-box" value="" oninput="_supEmbFilter=this.value;_renderSupEmbRows(gdb())"></div>'+
+    '<div style="padding:8px 12px 0"><input type="text" placeholder="Buscar embalagem..." class="sinput" style="width:100%;box-sizing:border-box" value="" oninput="_supEmbFilter=this.value;_renderSupEmbRows(gdb())"></div>'+
     '<div class="tw" id="sup-emb-tbl"></div></div>';
   _renderSupEmbTable();
 }
