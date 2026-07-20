@@ -582,8 +582,11 @@ const SUPA_KEY='sb_publishable_yyFwUYtK5D24yeAsd6jkjQ_UuizdNAA';
 const _AUDIT_KEY='tgl_v3_audit'; // linha separada no banco para o log de auditoria (legado)
 const _AUDIT_TABLE='tgl_audit_log'; // tabela dedicada — INSERT atômico por evento
 let _auditLog=[];                     // mantido em memória; nunca entra no payload principal
-const APP_VERSION='1.4.7';
+const APP_VERSION='1.4.8';
 const APP_CHANGELOG={
+  '1.4.8':[
+    'Correção crítica: lançamentos de estoque (MP e Embalagens) de outros dispositivos não somem mais — removida lógica de exclusão em _saveMovementsToTable que deletava movimentos do servidor quando o _db local ainda não havia recebido a atualização da sincronização',
+  ],
   '1.4.7':[
     'RPCs atômicas para lançamentos de MP e Embalagens: entradas, saídas e inventários agora usam operações atômicas no servidor, eliminando race condition de snapshot entre dispositivos simultâneos',
     'Correção: ícone duplo nas barras de busca (ícone CSS + emoji no placeholder) — todas as buscas padronizadas no sinput com ícone único via CSS',
@@ -923,35 +926,20 @@ async function _loadMovements(){
   };
 }
 async function _saveMovementsToTable(d){
-  const allCurrentIds=new Set([
-    ...(d.rawMaterialMovements||[]).map(m=>m.id),
-    ...(d.packagingMovements||[]).map(m=>m.id)
-  ]);
+  // Movimentos são append-only — nunca deletar do servidor.
+  // Bug corrigido (v1.4.8): _lastSavedMovIds era atualizado durante sync bloqueado (_saveInProgress),
+  // enquanto _db não era; o próximo save via _saveMovementsToTable via o ID "novo" em _lastSavedMovIds
+  // mas não no _db local e o DELETAVA do servidor. Removida lógica de toDelete completamente.
   const toInsert=[
     ...(d.rawMaterialMovements||[]).filter(m=>!_lastSavedMovIds.has(m.id)).map(m=>({id:m.id,data:m,category:'raw',updated_at:new Date().toISOString()})),
     ...(d.packagingMovements||[]).filter(m=>!_lastSavedMovIds.has(m.id)).map(m=>({id:m.id,data:m,category:'pack',updated_at:new Date().toISOString()}))
   ];
-  const toDelete=[..._lastSavedMovIds].filter(id=>!allCurrentIds.has(id));
-  // Guard: nunca deletar tudo se o local está vazio mas o servidor tinha dados
-  if(allCurrentIds.size===0&&toDelete.length>0){
-    console.warn('[TGL] _saveMovementsToTable: bloqueado mass-delete (local vazio, '+toDelete.length+' entradas no servidor)');
-    return;
-  }
-  const ps=[];
-  if(toInsert.length){
-    ps.push(_sf('/rest/v1/'+_MOV_TABLE,{
-      method:'POST',headers:{Prefer:'resolution=merge-duplicates'},body:JSON.stringify(toInsert)
-    }).then(r=>{
-      if(!r.ok)throw new Error('[TGL] movements insert HTTP '+r.status);
-      toInsert.forEach(row=>_lastSavedMovIds.add(row.id));
-    }));
-  }
-  if(toDelete.length){
-    const idsParam=toDelete.map(id=>'"'+id.replace(/"/g,'\\"')+'"').join(',');
-    ps.push(_sf('/rest/v1/'+_MOV_TABLE+'?id=in.('+idsParam+')',{method:'DELETE'})
-      .then(r=>{if(r.ok)toDelete.forEach(id=>_lastSavedMovIds.delete(id));}));
-  }
-  if(ps.length)await Promise.all(ps);
+  if(!toInsert.length)return;
+  const r=await _sf('/rest/v1/'+_MOV_TABLE,{
+    method:'POST',headers:{Prefer:'resolution=merge-duplicates'},body:JSON.stringify(toInsert)
+  });
+  if(!r.ok)throw new Error('[TGL] movements insert HTTP '+r.status);
+  toInsert.forEach(row=>_lastSavedMovIds.add(row.id));
 }
 
 // ── GENERIC ENTITY TABLE HELPERS ─────────────────────────────────────────────
