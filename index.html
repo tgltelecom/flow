@@ -582,7 +582,7 @@ const SUPA_KEY='sb_publishable_yyFwUYtK5D24yeAsd6jkjQ_UuizdNAA';
 const _AUDIT_KEY='tgl_v3_audit'; // linha separada no banco para o log de auditoria (legado)
 const _AUDIT_TABLE='tgl_audit_log'; // tabela dedicada — INSERT atômico por evento
 let _auditLog=[];                     // mantido em memória; nunca entra no payload principal
-const APP_VERSION='1.4.8';
+const APP_VERSION='1.4.9';
 const APP_CHANGELOG={
   '1.4.8':[
     'Correção crítica: lançamentos de estoque (MP e Embalagens) de outros dispositivos não somem mais — removida lógica de exclusão em _saveMovementsToTable que deletava movimentos do servidor quando o _db local ainda não havia recebido a atualização da sincronização',
@@ -5049,7 +5049,11 @@ function closeGSearch(){
       if(!_saveInProgress&&_saveQueue===null&&!_failedPayload){
         // FIX v1.3.7: aplica o baseline de estoque somente quando _db também vai ser
         // atualizado — garante que _lastSavedStockStr e _db.stock fiquem sempre em sincronia.
-        Object.assign(_lastSavedStockStr,_pendingStockBase);
+        // FIX v1.4.9: Object.assign movido para dentro de if(meaningfulChange||presenceChange).
+        // Antes: _lastSavedStockStr era atualizado com valor do servidor mesmo quando _db NÃO era
+        // (porque _gracePassed=false dentro dos 15s pós-save) → mismatch entre baseline e _db
+        // → próximo sdb() detectava divergência e regravava {total:0} de volta no servidor,
+        // zerando estoque de MP que acabara de ser corrigido por inventário ou RPC atômico.
         // Compara ignorando 'presence' — heartbeats mudam presence a cada 2 min
         // e disparariam refreshCurrentTab() constantemente sem motivo real.
         const {presence:_ndPres,...ndComp}=nd;
@@ -5057,6 +5061,7 @@ function closeGSearch(){
         const meaningfulChange=_gracePassed&&JSON.stringify(ndComp)!==JSON.stringify(dbComp);
         const presenceChange=JSON.stringify(_ndPres)!==JSON.stringify(_dbPres);
         if(meaningfulChange||presenceChange){
+          Object.assign(_lastSavedStockStr,_pendingStockBase);
           _db=nd;try{localStorage.setItem('tgl_bk',JSON.stringify(nd));}catch{}
           if(meaningfulChange&&!el('M').classList.contains('open'))refreshCurrentTab();
           renderBell();
