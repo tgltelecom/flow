@@ -1179,7 +1179,7 @@ async function saveDBRemote(d){
           merged.packaging=_db.packaging;
           merged.suppliers=_db.suppliers;
           merged.users=_db.users;
-          if(_saveQueue===null)_db=merged;
+          if(_saveQueue===null){console.log('[TGL DBG] saveDBRemote _db=merged | AREIA: _db.total='+_db.rawMaterialStock?.['idmr9c1s4vwrawj']?.total+' → merged.total='+merged.rawMaterialStock?.['idmr9c1s4vwrawj']?.total);_db=merged;}
           try{localStorage.setItem('tgl_bk',JSON.stringify(merged));}catch{}
           if(S&&!el('M').classList.contains('open'))_checkAlert();
         }
@@ -5062,6 +5062,8 @@ function closeGSearch(){
         const presenceChange=JSON.stringify(_ndPres)!==JSON.stringify(_dbPres);
         if(meaningfulChange||presenceChange){
           Object.assign(_lastSavedStockStr,_pendingStockBase);
+          const _dbgAid='idmr9c1s4vwrawj';
+          console.log('[TGL DBG] sync _db=nd | meaningful='+meaningfulChange+' presence='+presenceChange+' | AREIA: _db.total='+_db.rawMaterialStock?.[_dbgAid]?.total+' → nd.total='+nd.rawMaterialStock?.[_dbgAid]?.total+' | _gracePassed='+_gracePassed);
           _db=nd;try{localStorage.setItem('tgl_bk',JSON.stringify(nd));}catch{}
           if(meaningfulChange&&!el('M').classList.contains('open'))refreshCurrentTab();
           renderBell();
@@ -5371,6 +5373,7 @@ async function _rpcRMAdjust(mid,sid,delta){
   const r=await _sf('/rest/v1/rpc/adjust_rm_stock_dev',{method:'POST',body:JSON.stringify({p_id:'RM:'+mid,p_supplier_id:sid,p_delta:delta,p_at:at})});
   if(!r.ok)throw new Error((await r.text())||'Erro ao salvar estoque de matéria-prima');
   const nd=await r.json();
+  console.log('[TGL DBG] _rpcRMAdjust',mid,'delta='+delta,'→ nd=',JSON.stringify(nd));
   const d=gdb();d.rawMaterialStock[mid]=nd;
   _lastSavedStockStr['RM:'+mid]=JSON.stringify(nd);
 }
@@ -5380,8 +5383,10 @@ async function _rpcRMSet(mid,sid,qty){
   const r=await _sf('/rest/v1/rpc/set_rm_stock_dev',{method:'POST',body:JSON.stringify({p_id:'RM:'+mid,p_supplier_id:sid,p_qty:qty,p_at:at})});
   if(!r.ok)throw new Error((await r.text())||'Erro ao salvar inventário de matéria-prima');
   const nd=await r.json();
+  console.log('[TGL DBG] _rpcRMSet',mid,'→ nd=',JSON.stringify(nd));
   const d=gdb();d.rawMaterialStock[mid]=nd;
   _lastSavedStockStr['RM:'+mid]=JSON.stringify(nd);
+  console.log('[TGL DBG] _rpcRMSet done, _db.rawMaterialStock['+mid+'].total=',gdb().rawMaterialStock[mid]?.total);
 }
 
 // ─── STATUS DE ESTOQUE (para semáforo) ───
@@ -5968,6 +5973,7 @@ function _renderSupMPTable(){
 }
 function _renderSupMPRows(d){
   const t=el('sup-mp-rows');if(!t)return;
+  console.log('[TGL DBG] _renderSupMPRows | AREIA.total='+d.rawMaterialStock?.['idmr9c1s4vwrawj']?.total+' | filter="'+_supMPFilter+'"');
   const _flt=(_supMPFilter||'').toLowerCase().trim();
   const mats=_flt?d.rawMaterials.filter(m=>(m.name||'').toLowerCase().includes(_flt)||(m.code||'').toLowerCase().includes(_flt)):d.rawMaterials;
   if(!mats.length){t.innerHTML='<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--muted)">Nenhuma matéria-prima encontrada</td></tr>';return;}
