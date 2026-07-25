@@ -582,8 +582,11 @@ const SUPA_KEY='sb_publishable_yyFwUYtK5D24yeAsd6jkjQ_UuizdNAA';
 const _AUDIT_KEY='tgl_v3_audit'; // linha separada no banco para o log de auditoria (legado)
 const _AUDIT_TABLE='tgl_audit_log'; // tabela dedicada — INSERT atômico por evento
 let _auditLog=[];                     // mantido em memória; nunca entra no payload principal
-const APP_VERSION='1.4.9';
+const APP_VERSION='1.5.0';
 const APP_CHANGELOG={
+  '1.5.0':[
+    'Correção crítica: MP e produtos não somem mais da aba Suprimentos após sincronização automática — localWins=true era incorretamente ativado quando o item não existia no _db local (localVal=undefined) mas havia um baseline salvo de uma sincronização anterior, fazendo o servidor ser ignorado e o item desaparecer',
+  ],
   '1.4.8':[
     'Correção crítica: lançamentos de estoque (MP e Embalagens) de outros dispositivos não somem mais — removida lógica de exclusão em _saveMovementsToTable que deletava movimentos do servidor quando o _db local ainda não havia recebido a atualização da sincronização',
   ],
@@ -1179,7 +1182,7 @@ async function saveDBRemote(d){
           merged.packaging=_db.packaging;
           merged.suppliers=_db.suppliers;
           merged.users=_db.users;
-          if(_saveQueue===null){console.log('[TGL DBG] saveDBRemote _db=merged | AREIA: _db.total='+_db.rawMaterialStock?.['idmr9c1s4vwrawj']?.total+' → merged.total='+merged.rawMaterialStock?.['idmr9c1s4vwrawj']?.total);_db=merged;}
+          if(_saveQueue===null){_db=merged;}
           try{localStorage.setItem('tgl_bk',JSON.stringify(merged));}catch{}
           if(S&&!el('M').classList.contains('open'))_checkAlert();
         }
@@ -4996,13 +4999,15 @@ function closeGSearch(){
             const pid=id.slice(2);
             const localVal=(_db.stock||{})[pid];
             // Local vence se: (1) tem mudança pendente não salva, OU (2) local é mais recente que servidor
-            const localWins=(_lastSavedStockStr[id]&&JSON.stringify(localVal)!==_lastSavedStockStr[id])||_localIsNewer(localVal,data);
+            // FIX v1.5.0: localVal!==undefined garante que item ausente no _db nunca "vence" o servidor
+            const localWins=localVal!==undefined&&((_lastSavedStockStr[id]&&JSON.stringify(localVal)!==_lastSavedStockStr[id])||_localIsNewer(localVal,data));
             ns[pid]=localWins?localVal:data;
             _pendingStockBase[id]=JSON.stringify(data);
           }else if(id.startsWith('RM:')){
             const mid=id.slice(3);
             const localVal=(_db.rawMaterialStock||{})[mid];
-            const localWins=(_lastSavedStockStr[id]&&JSON.stringify(localVal)!==_lastSavedStockStr[id])||_localIsNewer(localVal,data);
+            // FIX v1.5.0: localVal!==undefined garante que item ausente no _db nunca "vence" o servidor
+            const localWins=localVal!==undefined&&((_lastSavedStockStr[id]&&JSON.stringify(localVal)!==_lastSavedStockStr[id])||_localIsNewer(localVal,data));
             nrm[mid]=localWins?localVal:data;
             _pendingStockBase[id]=JSON.stringify(data);
           }else if(id.startsWith('PK:')){
@@ -5062,8 +5067,6 @@ function closeGSearch(){
         const presenceChange=JSON.stringify(_ndPres)!==JSON.stringify(_dbPres);
         if(meaningfulChange||presenceChange){
           Object.assign(_lastSavedStockStr,_pendingStockBase);
-          const _dbgAid='idmr9c1s4vwrawj';
-          console.log('[TGL DBG] sync _db=nd | meaningful='+meaningfulChange+' presence='+presenceChange+' | AREIA: _db.total='+_db.rawMaterialStock?.[_dbgAid]?.total+' → nd.total='+nd.rawMaterialStock?.[_dbgAid]?.total+' | _gracePassed='+_gracePassed);
           _db=nd;try{localStorage.setItem('tgl_bk',JSON.stringify(nd));}catch{}
           if(meaningfulChange&&!el('M').classList.contains('open'))refreshCurrentTab();
           renderBell();
@@ -5373,7 +5376,6 @@ async function _rpcRMAdjust(mid,sid,delta){
   const r=await _sf('/rest/v1/rpc/adjust_rm_stock_dev',{method:'POST',body:JSON.stringify({p_id:'RM:'+mid,p_supplier_id:sid,p_delta:delta,p_at:at})});
   if(!r.ok)throw new Error((await r.text())||'Erro ao salvar estoque de matéria-prima');
   const nd=await r.json();
-  console.log('[TGL DBG] _rpcRMAdjust',mid,'delta='+delta,'→ nd=',JSON.stringify(nd));
   const d=gdb();d.rawMaterialStock[mid]=nd;
   _lastSavedStockStr['RM:'+mid]=JSON.stringify(nd);
 }
@@ -5383,10 +5385,8 @@ async function _rpcRMSet(mid,sid,qty){
   const r=await _sf('/rest/v1/rpc/set_rm_stock_dev',{method:'POST',body:JSON.stringify({p_id:'RM:'+mid,p_supplier_id:sid,p_qty:qty,p_at:at})});
   if(!r.ok)throw new Error((await r.text())||'Erro ao salvar inventário de matéria-prima');
   const nd=await r.json();
-  console.log('[TGL DBG] _rpcRMSet',mid,'→ nd=',JSON.stringify(nd));
   const d=gdb();d.rawMaterialStock[mid]=nd;
   _lastSavedStockStr['RM:'+mid]=JSON.stringify(nd);
-  console.log('[TGL DBG] _rpcRMSet done, _db.rawMaterialStock['+mid+'].total=',gdb().rawMaterialStock[mid]?.total);
 }
 
 // ─── STATUS DE ESTOQUE (para semáforo) ───
@@ -5973,7 +5973,6 @@ function _renderSupMPTable(){
 }
 function _renderSupMPRows(d){
   const t=el('sup-mp-rows');if(!t)return;
-  console.log('[TGL DBG] _renderSupMPRows | AREIA.total='+d.rawMaterialStock?.['idmr9c1s4vwrawj']?.total+' | filter="'+_supMPFilter+'"');
   const _flt=(_supMPFilter||'').toLowerCase().trim();
   const mats=_flt?d.rawMaterials.filter(m=>(m.name||'').toLowerCase().includes(_flt)||(m.code||'').toLowerCase().includes(_flt)):d.rawMaterials;
   if(!mats.length){t.innerHTML='<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--muted)">Nenhuma matéria-prima encontrada</td></tr>';return;}
