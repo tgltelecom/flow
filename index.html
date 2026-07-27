@@ -582,8 +582,11 @@ const SUPA_KEY='sb_publishable_yyFwUYtK5D24yeAsd6jkjQ_UuizdNAA';
 const _AUDIT_KEY='tgl_v3_audit'; // linha separada no banco para o log de auditoria (legado)
 const _AUDIT_TABLE='tgl_audit_log'; // tabela dedicada — INSERT atômico por evento
 let _auditLog=[];                     // mantido em memória; nunca entra no payload principal
-const APP_VERSION='1.5.0';
+const APP_VERSION='1.5.1';
 const APP_CHANGELOG={
+  '1.5.1':[
+    'Correção: migração de entidades (MP, Embalagens, Fornecedores, Produtos, Clientes, Usuários) agora é não-bloqueante e cobre o caso de erro no load — tabelas são populadas mesmo quando a primeira tentativa falha, sem impactar o tempo de login',
+  ],
   '1.5.0':[
     'Correção crítica: MP e produtos não somem mais da aba Suprimentos após sincronização automática — localWins=true era incorretamente ativado quando o item não existia no _db local (localVal=undefined) mas havia um baseline salvo de uma sincronização anterior, fazendo o servidor ser ignorado e o item desaparecer',
   ],
@@ -1037,45 +1040,46 @@ async function loadDB(){
     // Produtos
     if(prodsLoaded!==null&&prodsLoaded.length>0){
       _db.products=prodsLoaded;
-    }else if(prodsLoaded!==null&&(_db.products||[]).length>0){
-      console.log('[TGL] Migrando '+_db.products.length+' produtos…');
-      await _saveEntityTable(_PROD_TABLE,_db.products,_lastSavedProdStr);
-    }else{_db.products=_db.products||[];}
+    }else{
+      // FIX v1.5.1: cobre tabela vazia (prodsLoaded=[]) E erro de load (prodsLoaded=null); não-bloqueante
+      if((_db.products||[]).length>0){console.log('[TGL] Migrando/recuperando '+_db.products.length+' produtos…');_saveEntityTable(_PROD_TABLE,_db.products,_lastSavedProdStr).catch(e=>console.warn('[TGL] products migrate warn:',e));}
+      else{_db.products=_db.products||[];}
+    }
     // Clientes
     if(clisLoaded!==null&&clisLoaded.length>0){
       _db.clients=clisLoaded;
-    }else if(clisLoaded!==null&&(_db.clients||[]).length>0){
-      console.log('[TGL] Migrando '+_db.clients.length+' clientes…');
-      await _saveEntityTable(_CLI_TABLE,_db.clients,_lastSavedCliStr);
-    }else{_db.clients=_db.clients||[];}
+    }else{
+      if((_db.clients||[]).length>0){console.log('[TGL] Migrando/recuperando '+_db.clients.length+' clientes…');_saveEntityTable(_CLI_TABLE,_db.clients,_lastSavedCliStr).catch(e=>console.warn('[TGL] clients migrate warn:',e));}
+      else{_db.clients=_db.clients||[];}
+    }
     // Matérias-Primas
     if(rmsLoaded!==null&&rmsLoaded.length>0){
       _db.rawMaterials=rmsLoaded;
-    }else if(rmsLoaded!==null&&(_db.rawMaterials||[]).length>0){
-      console.log('[TGL] Migrando '+_db.rawMaterials.length+' matérias-primas…');
-      await _saveEntityTable(_RM_TABLE,_db.rawMaterials,_lastSavedRMStr);
-    }else{_db.rawMaterials=_db.rawMaterials||[];}
+    }else{
+      if((_db.rawMaterials||[]).length>0){console.log('[TGL] Migrando/recuperando '+_db.rawMaterials.length+' matérias-primas…');_saveEntityTable(_RM_TABLE,_db.rawMaterials,_lastSavedRMStr).catch(e=>console.warn('[TGL] rawMaterials migrate warn:',e));}
+      else{_db.rawMaterials=_db.rawMaterials||[];}
+    }
     // Embalagens
     if(packsLoaded!==null&&packsLoaded.length>0){
       _db.packaging=packsLoaded;
-    }else if(packsLoaded!==null&&(_db.packaging||[]).length>0){
-      console.log('[TGL] Migrando '+_db.packaging.length+' embalagens…');
-      await _saveEntityTable(_PACK_TABLE,_db.packaging,_lastSavedPackStr);
-    }else{_db.packaging=_db.packaging||[];}
+    }else{
+      if((_db.packaging||[]).length>0){console.log('[TGL] Migrando/recuperando '+_db.packaging.length+' embalagens…');_saveEntityTable(_PACK_TABLE,_db.packaging,_lastSavedPackStr).catch(e=>console.warn('[TGL] packaging migrate warn:',e));}
+      else{_db.packaging=_db.packaging||[];}
+    }
     // Fornecedores
     if(suppsLoaded!==null&&suppsLoaded.length>0){
       _db.suppliers=suppsLoaded;
-    }else if(suppsLoaded!==null&&(_db.suppliers||[]).length>0){
-      console.log('[TGL] Migrando '+_db.suppliers.length+' fornecedores…');
-      await _saveEntityTable(_SUPP_TABLE,_db.suppliers,_lastSavedSuppStr);
-    }else{_db.suppliers=_db.suppliers||[];}
+    }else{
+      if((_db.suppliers||[]).length>0){console.log('[TGL] Migrando/recuperando '+_db.suppliers.length+' fornecedores…');_saveEntityTable(_SUPP_TABLE,_db.suppliers,_lastSavedSuppStr).catch(e=>console.warn('[TGL] suppliers migrate warn:',e));}
+      else{_db.suppliers=_db.suppliers||[];}
+    }
     // Usuários
     if(usersLoaded!==null&&usersLoaded.length>0){
       _db.users=usersLoaded;
-    }else if(usersLoaded!==null&&(_db.users||[]).length>0){
-      console.log('[TGL] Migrando '+_db.users.length+' usuários…');
-      await _saveEntityTable(_USERS_TABLE,_db.users,_lastSavedUsersStr);
-    }else{_db.users=_db.users||[];}
+    }else{
+      if((_db.users||[]).length>0){console.log('[TGL] Migrando/recuperando '+_db.users.length+' usuários…');_saveEntityTable(_USERS_TABLE,_db.users,_lastSavedUsersStr).catch(e=>console.warn('[TGL] users migrate warn:',e));}
+      else{_db.users=_db.users||[];}
+    }
     _loadAuditLog(); // não bloqueia
     setSyncBadge(true);
   }catch(e){
