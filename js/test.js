@@ -1,0 +1,1 @@
+content of js/test.js
