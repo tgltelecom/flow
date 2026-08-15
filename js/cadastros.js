@@ -207,7 +207,7 @@ function _renderKitList(){
   if(!window._kitComps.length){
     t.innerHTML='<div style="padding:12px;text-align:center;color:var(--muted);font-size:13px;border:1px dashed var(--border);border-radius:6px;margin-top:6px">Adicione produtos usando a busca acima.</div>';return;
   }
-  t.innerHTML='<div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">'+
+  t.innerHTML='<div style="margin-top:8px;max-height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:6px">'+
     window._kitComps.map((c,i)=>{
       const p=d.products.find(x=>x.id===c.productId);
       return'<div style="display:flex;align-items:center;gap:8px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:8px 12px">'+
@@ -411,7 +411,7 @@ function openFornForm(id){
   const d=gdb(),s=id?d.suppliers.find(x=>x.id===id):null;
   Mopen(s?'Editar Fornecedor':'Novo Fornecedor',
     '<div class="fg"><label>Nome *</label><input type="text" id="fn-name" value="'+esc(s?s.name:'')+'" placeholder="Razão social ou nome fantasia"></div>'+
-    '<div class="fg"><label>CNPJ</label><input type="text" id="fn-cnpj" value="'+esc(s?s.cnpj||'':'')+'" placeholder="00.000.000/0000-00" maxlength="18" oninput="this.value=maskCNPJ(this.value)"></div>',
+    '<div class="fg"><label>CNPJ</label><input class="sinput" type="text" id="fn-cnpj" value="'+esc(s?maskCNPJ(s.cnpj||''):'')+'" placeholder="00.000.000/0000-00" maxlength="18" oninput="this.value=maskCNPJ(this.value)"></div>',
     '<button class="btn btn-ghost" onclick="Mclose()">Cancelar</button>'+
     '<button class="btn btn-green" onclick="saveForn(\''+( id||'')+'\')">💾 Salvar</button>'
   );

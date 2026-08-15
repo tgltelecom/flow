@@ -29,7 +29,7 @@ function rAgenda() {
 
   cnt.innerHTML =
     '<div class="ptitle">📅 Agenda de Produção</div>' +
-    '<div class="psub">Calendário de OPs por data de entrega</div>' +
+    '<div class="psub">Visualize as OPs por data de entrega. Clique em qualquer dia com OPs para ver os detalhes.</div>' +
     '<div id="agenda-wrap"></div>';
 
   _renderAgenda();
@@ -160,14 +160,17 @@ function _buildCalendar(d) {
     const chips = visible.map(op => {
       const st = _AG_STATUS[op.status || 'pendente'] || _AG_STATUS.pendente;
       const label = '#' + (op.opNum || '?') + ' – ' + (op.clientName || '').slice(0, 12);
-      return `<div onclick="agOpenOp('${esc(op.id)}')" style="background:${st.bg};color:${st.text};border-radius:4px;font-size:10px;padding:2px 5px;margin-top:2px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(op.opNum+' – '+(op.clientName||''))}">${esc(label)}</div>`;
+      return `<div onclick="event.stopPropagation();agOpenOp('${esc(op.id)}')" style="background:${st.bg};color:${st.text};border-radius:4px;font-size:10px;padding:2px 5px;margin-top:2px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(op.opNum+' – '+(op.clientName||''))}">${esc(label)}</div>`;
     }).join('');
 
     const extraChip = extra > 0
-      ? `<div onclick="agOpenDay('${dateStr}')" style="font-size:10px;color:var(--muted);padding:2px 5px;cursor:pointer">+${extra} mais...</div>`
+      ? `<div onclick="event.stopPropagation();agOpenDay('${dateStr}')" style="font-size:10px;color:var(--muted);padding:2px 5px;cursor:pointer">+${extra} mais...</div>`
       : '';
 
-    html += `<div style="min-height:80px;background:${dayBg};border:${dayBorder};border-radius:8px;padding:5px 6px;cursor:${ops.length ? 'default' : 'default'}">`+
+    const cellClick = ops.length ? `onclick="agOpenDay('${dateStr}')"` : '';
+    const cellCursor = ops.length ? 'pointer' : 'default';
+    const cellHover = ops.length ? ' class="ag-day-active"' : '';
+    html += `<div${cellHover} ${cellClick} style="min-height:80px;background:${dayBg};border:${dayBorder};border-radius:8px;padding:5px 6px;cursor:${cellCursor}">`+
       `<div style="font-size:12px;font-weight:700;color:${dayNumColor};margin-bottom:2px">${day}</div>` +
       chips + extraChip +
       '</div>';

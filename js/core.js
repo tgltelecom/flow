@@ -980,6 +980,15 @@ function _unitSel(id, val, def) {
 // Sort helpers
 function _sArr(col, state) { return state.col === col ? (state.dir === 1 ? '▲' : '▼') : '<span style="opacity:.3">⇅</span>'; }
 
+// Expand/collapse table row (usado em expedição, produção, etc.)
+function togExpand(rowId, btnId) {
+  const row = el(rowId), btn = el(btnId); if (!row) return;
+  const open = row.style.display !== 'none';
+  row.style.display = open ? 'none' : 'table-row';
+  if (btn) btn.classList.toggle('open', !open);
+}
+window.togExpand = togExpand;
+
 // Login form helpers
 function showLF(f) {
   ['login', 'first', 'reg', 'forgot'].forEach(x => { const e = document.getElementById('lf-' + x); if (e) e.style.display = 'none'; });

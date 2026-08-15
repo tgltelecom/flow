@@ -218,25 +218,39 @@ function _renderRelEstoque() {
     return { name: p.name, sku: p.sku || '', unit: p.unit || 'UN', qty, min: p.minStock || 0, status };
   });
 
-  function _tbl(title, rows, cols) {
-    if (!rows.length) return '';
+  function _stBadge(qty, min) {
+    if (!min) return '<span style="color:var(--muted);font-size:12px">Sem mínimo</span>';
+    if (qty === 0) return '<span class="badge-status bs-falta">🔴 Zerado</span>';
+    if (qty < min) return '<span class="badge-status bs-aguardando">🟡 Baixo</span>';
+    return '<span class="badge-status bs-finalizado">🟢 OK</span>';
+  }
+
+  function _tbl(title, rows) {
+    if (!rows.length) return '<div class="card" style="margin-bottom:16px"><div class="ptitle" style="font-size:15px;margin-bottom:4px">' + title + '</div><div style="color:var(--muted);font-size:13px;padding:12px 0">Nenhum item cadastrado.</div></div>';
+    const crit = rows.filter(r => r.min && r.qty < r.min).length;
+    const summary = crit ? '<span class="badge-status bs-falta" style="font-size:12px;margin-left:8px">'+crit+' abaixo do mínimo</span>' : '';
+    // Ordena: zerados primeiro, depois baixos, depois OK
+    rows.sort((a,b) => {
+      const rank = r => !r.min ? 99 : r.qty === 0 ? 0 : r.qty < r.min ? 1 : 2;
+      return rank(a) - rank(b);
+    });
     return '<div class="card" style="margin-bottom:16px">' +
-      '<div class="card-header"><div class="card-title">' + title + ' <span style="font-size:12px;font-weight:400;color:var(--muted)">(' + rows.length + ')</span></div></div>' +
-      '<div class="tw" style="max-height:320px;overflow-y:auto"><table><thead><tr>' +
-      cols.map(c => '<th>' + c + '</th>').join('') +
+      '<div class="card-header"><div class="card-title" style="display:flex;align-items:center;gap:6px">' + title +
+      ' <span style="font-size:12px;font-weight:400;color:var(--muted)">(' + rows.length + ' itens)</span>' + summary + '</div></div>' +
+      '<div class="tw"><table class="data-table"><thead><tr>' +
+      '<th>Nome</th><th style="text-align:center">Qtd</th><th style="text-align:center">Un.</th><th style="text-align:center">Mínimo</th><th>Status</th>' +
       '</tr></thead><tbody>' +
-      rows.map(r => '<tr>' +
+      rows.map(r => '<tr' + (r.min && r.qty === 0 ? ' style="background:rgba(239,68,68,.05)"' : '') + '>' +
         '<td>' + esc(r.name) + (r.sku ? ' <span class="sku">' + esc(r.sku) + '</span>' : '') + '</td>' +
-        '<td style="text-align:center;font-weight:600">' + fnum(r.qty) + '</td>' +
+        '<td style="text-align:center;font-weight:600;font-size:15px">' + fqty(r.qty, r.unit) + '</td>' +
         '<td style="text-align:center;color:var(--muted)">' + esc(r.unit) + '</td>' +
-        '<td style="text-align:center;color:var(--muted)">' + (r.min ? fnum(r.min) : '—') + '</td>' +
-        '<td>' + r.status + '</td>' +
+        '<td style="text-align:center;color:var(--muted)">' + (r.min ? fqty(r.min, r.unit) : '—') + '</td>' +
+        '<td>' + _stBadge(r.qty, r.min) + '</td>' +
       '</tr>').join('') +
       '</tbody></table></div></div>';
   }
 
-  const cols = ['Nome', 'Qtd', 'Un.', 'Mínimo', 'Status'];
-  cnt.innerHTML = _tbl('🌿 Matéria-Prima', mpRows, cols) + _tbl('📦 Embalagens', embRows, cols) + _tbl('🏷️ Produtos de Revenda', revRows, cols);
+  cnt.innerHTML = _tbl('🌿 Matéria-Prima', mpRows) + _tbl('📦 Embalagens', embRows) + _tbl('🏷️ Produtos de Revenda', revRows);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -246,11 +260,11 @@ async function _renderRelAudit() {
   const cnt = document.getElementById('rel-content'); if (!cnt) return;
   cnt.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted)">🔄 Carregando histórico de auditoria...</div>';
   try {
-    const from = _relDateFrom ? new Date(_relDateFrom).toISOString() : '';
-    const to   = _relDateTo   ? new Date(_relDateTo + 'T23:59:59').toISOString() : '';
+    const from = _relDateFrom ? new Date(_relDateFrom).getTime() : '';
+    const to   = _relDateTo   ? new Date(_relDateTo + 'T23:59:59').getTime() : '';
     let url = '/rest/v1/' + _AUDIT_TABLE + '?select=*&order=at.desc&limit=500';
-    if (from) url += '&at=gte.' + encodeURIComponent(from);
-    if (to)   url += '&at=lte.' + encodeURIComponent(to);
+    if (from) url += '&at=gte.' + from;
+    if (to)   url += '&at=lte.' + to;
     const r = await _sf(url);
     if (!r.ok) throw new Error(await r.text());
     const rows = await r.json();

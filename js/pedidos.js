@@ -9,6 +9,7 @@ function rPedidos(cnt){
   cnt.innerHTML='<div class="ptitle">📤 Pedidos</div>'+
     '<div class="stabs">'+
     '<button class="stab on" id="st-up" onclick="pstab(\'up\')">Upload de OP</button>'+
+    '<button class="stab" id="st-list" onclick="pstab(\'list\')">📋 OPs Ativas</button>'+
     '</div>'+
     '<div id="stcontent"></div>';
   tabUpload();
@@ -19,8 +20,71 @@ function pstab(t){
   document.querySelectorAll('.stab[id^="st-"]').forEach(b=>b.classList.remove('on'));
   const bt=el('st-'+t);if(bt)bt.classList.add('on');
   if(t==='up')tabUpload();
+  else if(t==='list')tabOPsAtivas();
 }
 window.pstab=pstab;
+
+// ─── OPS ATIVAS ───────────────────────────────────────────────────────────────
+let _opSort={col:'createdAt',dir:-1},_opQ='';
+function tabOPsAtivas(){
+  const d=gdb();
+  const ops=d.ops.filter(o=>!o.archived&&o.status!=='finalizado');
+  const sc=el('stcontent');
+  sc.innerHTML=
+    '<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">'+
+    '<input class="sinput" style="flex:1;min-width:180px" id="op-srch" placeholder="🔍 Buscar por nº pedido ou cliente..." oninput="_opFilter()" value="'+esc(_opQ)+'">'+
+    '<select class="sinput" style="width:200px" id="op-st-filt" onchange="_opFilter()">'+
+    '<option value="">Todos os status</option>'+
+    '<option value="pendente">⏳ Pendente</option>'+
+    '<option value="em_producao">🔄 Em produção</option>'+
+    '<option value="liberado">✅ Liberado</option>'+
+    '<option value="materia_falta">🚫 Mat.-prima em falta</option>'+
+    '</select>'+
+    '</div>'+
+    '<div id="ops-tbl"></div>';
+  _opFilter();
+}
+window.tabOPsAtivas=tabOPsAtivas;
+
+function _opFilter(){
+  _opQ=(el('op-srch')||{value:''}).value.toLowerCase();
+  const stF=(el('op-st-filt')||{value:''}).value;
+  const d=gdb();
+  let ops=d.ops.filter(o=>!o.archived&&o.status!=='finalizado');
+  if(_opQ)ops=ops.filter(o=>(o.opNum||'').toLowerCase().includes(_opQ)||(o.clientName||'').toLowerCase().includes(_opQ));
+  if(stF)ops=ops.filter(o=>o.status===stF);
+  ops.sort((a,b)=>_opSort.dir*((_opSort.col==='createdAt'?(a.createdAt||0)-(b.createdAt||0):String(a[_opSort.col]||'').localeCompare(String(b[_opSort.col]||'')))));
+  const t=el('ops-tbl');if(!t)return;
+  if(!ops.length){t.innerHTML='<div class="empty-state">Nenhuma OP ativa</div>';return;}
+  t.innerHTML='<table class="data-table"><thead><tr>'+
+    '<th style="cursor:pointer" onclick="_opSortBy(\'opNum\')">Nº Pedido '+_sArr('opNum',_opSort)+'</th>'+
+    '<th style="cursor:pointer" onclick="_opSortBy(\'clientName\')">Cliente '+_sArr('clientName',_opSort)+'</th>'+
+    '<th style="cursor:pointer" onclick="_opSortBy(\'deliveryDate\')">Entrega '+_sArr('deliveryDate',_opSort)+'</th>'+
+    '<th>Status</th>'+
+    '<th>Itens</th>'+
+    '<th></th>'+
+    '</tr></thead><tbody>'+
+    ops.map(op=>{
+      const items=op.items||[];
+      const nItems=items.length;
+      return'<tr>'+
+        '<td><strong>#'+esc(op.opNum||'—')+'</strong></td>'+
+        '<td>'+esc(op.clientName||'—')+'</td>'+
+        '<td>'+fdate(op.deliveryDate)+(op.deliveryDate?diasChip(op.deliveryDate,op.status):'')+'</td>'+
+        '<td><span class="badge-status '+stclass(op.status)+'">'+stlabel(op.status)+'</span></td>'+
+        '<td style="text-align:center">'+nItems+'</td>'+
+        '<td><a class="btn btn-ghost btn-sm" href="producao.html">Ver produção</a></td>'+
+        '</tr>';
+    }).join('')+
+    '</tbody></table>';
+}
+window._opFilter=_opFilter;
+
+function _opSortBy(col){
+  if(_opSort.col===col)_opSort.dir*=-1;else{_opSort.col=col;_opSort.dir=1;}
+  _opFilter();
+}
+window._opSortBy=_opSortBy;
 
 // ─── UPLOAD ───────────────────────────────────────────────────────────────────
 function tabUpload(){
