@@ -1,3 +1,27 @@
 {
-  "name": "Flow TGL"
+  "name": "Flow TGL",
+  "short_name": "Flow TGL",
+  "description": "Sistema de produção TGL Telecom",
+  "start_url": "/flow/",
+  "scope": "/flow/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#1e293b",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect width='192' height='192' rx='32' fill='%231e293b'/><text y='130' x='50%' text-anchor='middle' font-size='110' font-family='Arial'>⚙️</text></svg>",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='80' fill='%231e293b'/><text y='360' x='50%' text-anchor='middle' font-size='300' font-family='Arial'>⚙️</text></svg>",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["productivity", "business"],
+  "lang": "pt-BR"
 }

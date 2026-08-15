@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#1e293b">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>Flow TGL — Dashboard</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <div id="shell"></div>
+  <script src="js/core.js"></script>
+  <script src="js/_shell.js"></script>
+  <script src="js/dashboard.js"></script>
+  <script>
+    initShell('dashboard.html', function() {
+      const roles = _roles(S);
+      if (isComprador()) { rCompradorDashboard(); }
+      else if (roles.every(r => ['preformados','estamparia','espinar','expedicao'].includes(r))) { rSectorDashboard(roles[0]); }
+      else { rDashboard(); }
+      // Callback de atualização quando sync traz dados novos
+      window._onSyncUpdate = function() { /* silencioso — botão atualizar é explícito */ };
+    });
+  </script>
+</body>
+</html>
