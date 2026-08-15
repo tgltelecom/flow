@@ -109,6 +109,20 @@ function agFilter(s) {
 }
 window.agFilter = agFilter;
 
+// Mapeamento de filtro → grupo de status (para não perder sub-estados)
+const _AG_STATUS_GROUPS = {
+  pendente:    ['pendente','materia_falta','aguardando_mp'],
+  em_producao: ['em_producao','producao_iniciada','revisao_qualidade','galvanizacao_externa',
+                'pref_formadeira','pref_coladeira','pref_pulverizadeira','pref_torcedeira','pref_dobradeira','pref_ficha_falta'],
+  liberado:    ['liberado'],
+  finalizado:  ['finalizado'],
+};
+function _agMatch(opStatus, filter) {
+  if (!filter) return true;
+  const group = _AG_STATUS_GROUPS[filter] || [filter];
+  return group.includes(opStatus || 'pendente');
+}
+
 // ─── Constrói grelha do calendário ────────────────────────────────
 function _buildCalendar(d) {
   const firstDay = new Date(_agYear, _agMonth, 1);
@@ -120,8 +134,7 @@ function _buildCalendar(d) {
   const byDate = {};
   (d.ops || []).forEach(op => {
     if (!op.deliveryDate) return;
-    const status = op.status || 'pendente';
-    if (_agFilter && status !== _agFilter) return;
+    if (!_agMatch(op.status, _agFilter)) return;
     const dd = op.deliveryDate.split('T')[0];
     if (!byDate[dd]) byDate[dd] = [];
     byDate[dd].push(op);
@@ -187,7 +200,7 @@ function _buildSidebar(d) {
   // OPs sem data de entrega definida
   const semData = (d.ops || []).filter(op => {
     if (op.status === 'finalizado') return false;
-    if (_agFilter && op.status !== _agFilter) return false;
+    if (!_agMatch(op.status, _agFilter)) return false;
     return !op.deliveryDate || op.deliveryDate.trim() === '';
   });
 

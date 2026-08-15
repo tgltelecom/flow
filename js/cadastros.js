@@ -137,8 +137,57 @@ window.sortProd=sortProd;
 // ─── KIT — estado global durante edição ──────────────────────────────────────
 window._kitComps = [];
 
+// ─── PREFORMADOS — Parser de nome ─────────────────────────────────────────────
+function _parsePRFName(name){
+  const n=(name||'').toUpperCase().trim();
+  const tipo=['DERIVACAO','ALCA','LACO'].find(t=>n.startsWith(t))||'';
+  const material=['AL CABO OPTICO','AC CCE'].find(m=>n.includes(m))||'';
+  const rangeM=n.match(/([\d]+[,.][\d]+|[\d]+)\s*-\s*([\d]+[,.][\d]+|[\d]+)\s*mm/);
+  const rangeMin=rangeM?parseFloat(rangeM[1].replace(',','.')):0;
+  const rangeMax=rangeM?parseFloat(rangeM[2].replace(',','.')):0;
+  let cor='',varetas=0,comprimento=0;
+  if(rangeM){
+    const afterRange=n.slice(n.indexOf(rangeM[0])+rangeM[0].length).trim();
+    const varetasM=afterRange.match(/(\d+)\s*V\b/);
+    varetas=varetasM?parseInt(varetasM[1]):0;
+    const varetasIdx=varetasM?afterRange.indexOf(varetasM[0]):afterRange.length;
+    cor=afterRange.slice(0,varetasIdx).trim();
+    const comprM=afterRange.match(/(\d+)\s*mm\s*$/);
+    comprimento=comprM?parseInt(comprM[1]):0;
+  }
+  return{tipo,material,rangeMin,rangeMax,cor,varetas,comprimento};
+}
+function _renderPRFPreview(parsed){
+  const f=(l,v)=>'<div style="background:var(--bg);border-radius:6px;padding:8px 10px">'+
+    '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">'+l+'</div>'+
+    '<div style="font-size:14px;font-weight:600;margin-top:2px">'+(v||'<span style="color:var(--muted)">—</span>')+'</div></div>';
+  return '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:10px 0 14px">'+
+    f('Tipo',parsed.tipo)+f('Material',parsed.material)+
+    f('Range',parsed.rangeMin?parsed.rangeMin.toFixed(2)+' – '+parsed.rangeMax.toFixed(2)+'mm':'')+
+    f('Cor',parsed.cor)+f('Varetas',parsed.varetas?parsed.varetas+'V':'')+
+    f('Comprimento',parsed.comprimento?parsed.comprimento+'mm':'')+'</div>';
+}
+window._prf_parsePreview=function(val){
+  const p=el('prf-preview');if(p)p.innerHTML=_renderPRFPreview(_parsePRFName(val));
+};
+function _openPRFProdForm(p,id){
+  const parsed=_parsePRFName(p.name);
+  Mopen('🧵 Editar Preformado',
+    '<div style="background:rgba(34,197,94,.07);border:1px solid rgba(34,197,94,.2);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:var(--sub)">'+
+    '🧵 Preformado — edite o <strong>nome completo</strong> e os campos estruturais serão extraídos automaticamente.</div>'+
+    '<div class="fg"><label>Nome completo *</label>'+
+    '<input class="sinput" type="text" id="pf-name" value="'+esc(p.name)+'" oninput="_prf_parsePreview(this.value)" placeholder="Ex: ALCA PRF AC CCE 10,00 - 10,80mm VERDE 3V 480mm"></div>'+
+    '<div id="prf-preview">'+_renderPRFPreview(parsed)+'</div>'+
+    '<div class="fg"><label>SKU / Código</label><input class="sinput" type="text" id="pf-sku" value="'+esc(p.sku||'')+'" placeholder="Ex: PRF096"></div>',
+    '<button class="btn btn-ghost" onclick="Mclose()">Cancelar</button>'+
+    '<button class="btn btn-green" onclick="saveProd(\''+( id||'')+'\')">💾 Salvar</button>'
+  );
+}
+
 function openProdForm(id){
   const d=gdb(),p=id?d.products.find(x=>x.id===id):null;
+  // PRF product: different form (parse name → show fields)
+  if(p&&/\bPRF\b/i.test(p.name)){_openPRFProdForm(p,id);return;}
   window._kitComps=p&&p.isKit&&p.kitComponents?p.kitComponents.map(c=>({...c})):[];
   const isKitNow=!!(p&&p.isKit);
   Mopen(p?'Editar Produto':'Novo Produto',
@@ -220,8 +269,21 @@ function _renderKitList(){
 window._renderKitList=_renderKitList;
 
 function saveProd(id){
-  const name=v('pf-name').trim(),sku=v('pf-sku').trim(),unit=v('pf-unit')||'UN';
+  const name=v('pf-name').trim(),sku=v('pf-sku').trim();
   if(!name){toast('Nome obrigatório','err');return;}
+  // PRF: save with parsed prfData, setor=preformados, tipo=producao
+  if(/\bPRF\b/i.test(name)){
+    const prfData=_parsePRFName(name);
+    const d=gdb();
+    const dup=d.products.find(x=>x.name.trim().toLowerCase()===name.toLowerCase()&&x.id!==id);
+    if(dup){toast('Já existe um produto com esse nome','err');return;}
+    const obj={name,sku,unit:'UN',isStock:false,sectors:['preformados'],isKit:false,kitComponents:[],prfData};
+    if(id){const i=d.products.findIndex(x=>x.id===id);if(i>=0)d.products[i]={...d.products[i],...obj};}
+    else d.products.push({id:uid(),...obj});
+    logAction(d,id?'Produto editado':'Produto criado','['+sku+'] '+name);
+    sdb(d);Mclose();toast('Preformado salvo!','ok');filterProd();return;
+  }
+  const unit=v('pf-unit')||'UN';
   const tipo=document.querySelector('input[name="pf-tipo"]:checked').value;
   const isStock=tipo==='estoque';
   const sectors=isStock?[]:Array.from(document.querySelectorAll('input[name="pf-sec"]:checked')).map(c=>c.value);

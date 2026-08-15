@@ -731,18 +731,19 @@ window.importarOlist = async function () {
     );
   } catch (e) {
     const errMsg = String(e.message || e);
-    const isNotConfigured = errMsg.includes('OLIST_TOKEN');
+    // Se a função existe mas retornou erro JSON → provavelmente token não configurado
+    const fnExists = errMsg.startsWith('{') || errMsg.includes('SyntaxError') || errMsg.includes('Unexpected end');
+    const isNotConfigured = errMsg.includes('OLIST_TOKEN') || fnExists;
     Mopen('🔄 Importar do Olist',
       '<div class="alert" style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px;padding:14px;color:var(--text)">' +
-      '<strong>❌ ' + (isNotConfigured ? 'Token Olist não configurado' : 'Erro ao conectar com o Olist') + '</strong><br><br>' +
-      (isNotConfigured
-        ? 'Para ativar a importação automática:<br>' +
-          '1. Acesse o <strong>Supabase Dashboard</strong> → Edge Functions → olist-proxy → Secrets<br>' +
-          '2. Adicione o secret: <code>OLIST_TOKEN</code> = seu Bearer token do Olist ERP<br>' +
-          '3. O token é gerado em: Olist ERP → Configurações → Extensões → API v3'
-        : '<code>' + esc(errMsg) + '</code><br><br>Verifique se a Edge Function <strong>olist-proxy</strong> foi deployada no Supabase.<br>' +
-          'Comando: <code>supabase functions deploy olist-proxy</code>'
-      ) + '</div>',
+      '<strong>❌ Token Olist não configurado</strong><br><br>' +
+      'A Edge Function <strong>olist-proxy</strong> está deployada, mas falta o token de acesso à API do Olist.<br><br>' +
+      'Para ativar a importação:<br>' +
+      '1. Acesse o <a href="https://supabase.com/dashboard/project/bobzfvyqqxapvoabtejl/functions" target="_blank" style="color:var(--green)">Supabase Dashboard → Edge Functions</a><br>' +
+      '2. Clique em <strong>olist-proxy</strong> → <strong>Secrets</strong><br>' +
+      '3. Adicione o secret: <code>OLIST_TOKEN</code> = seu Bearer token do Olist ERP<br>' +
+      '4. O token é gerado em: <em>Olist ERP → Configurações → Extensões → API v3</em>' +
+      '</div>',
       '<button class="btn btn-ghost" onclick="Mclose()">Fechar</button>'
     );
   }
