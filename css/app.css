@@ -495,3 +495,6 @@ tbody tr:last-child td { border-bottom: none }
   table { min-width: 400px }
   .ptitle { font-size: 15px }
 }
+
+/* Agenda */
+.ag-day-active:hover { filter: brightness(1.1); transition: filter .15s }
