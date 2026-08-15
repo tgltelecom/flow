@@ -60,6 +60,13 @@ let _lastSaveAt     = 0;
 // Audit log (em memória)
 let _auditLog = [];
 
+// ─── JWT PERSISTENCE (sessão entre páginas) ───────────────────────────────────
+// Restaura JWT do sessionStorage no carregamento de cada página
+(function() {
+  const stored = sessionStorage.getItem('tgl_jwt');
+  if (stored) window._supaJwt = stored;
+})();
+
 // ─── FETCH HELPER ─────────────────────────────────────────────────────────────
 async function _sf(path, opts = {}) {
   const token = window._supaJwt || SUPA_KEY;
@@ -471,6 +478,7 @@ async function doLogin() {
     if (authRes.ok) {
       const authData = await authRes.json();
       window._supaJwt = authData.access_token;
+      sessionStorage.setItem('tgl_jwt', authData.access_token);
     }
     // Se o auth.signInWithPassword falhar (usuário não existe no Supabase Auth ainda),
     // continua com a anon key — RLS virá na v2.0 após migração completa
@@ -543,6 +551,7 @@ function _getFirstPage(u) {
 function doLogout() {
   S = null; _loginAt = 0; window._supaJwt = null;
   sessionStorage.removeItem('tgl_s');
+  sessionStorage.removeItem('tgl_jwt');
   window.location.href = 'index.html';
 }
 
