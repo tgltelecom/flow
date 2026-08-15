@@ -4,7 +4,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 let _draft=null,_newProds=[];
-let _modalLocked=false;
 
 function rPedidos(cnt){
   cnt.innerHTML='<div class="ptitle">📤 Pedidos</div>'+

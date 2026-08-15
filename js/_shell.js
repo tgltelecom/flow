@@ -80,7 +80,7 @@ function initShell(currentFile, onReady) {
     autoArchive();
 
     // Chamar callback da página
-    if (typeof onReady === 'function') onReady();
+    if (typeof onReady === 'function') onReady(document.getElementById('acontent'));
 
     // Verificar alertas e estoque após render
     setTimeout(() => {
