@@ -906,6 +906,7 @@ setInterval(() => {
 // ─── UTILS ────────────────────────────────────────────────────────────────────
 function el(id) { return document.getElementById(id); }
 function val(id) { return (document.getElementById(id) || { value: '' }).value; }
+function v(id) { return (document.getElementById(id) || { value: '' }).value; }
 function esc(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 function fdate(d) { if (!d) return '—'; const p = d.split('-'); return p.length === 3 ? p[2] + '/' + p[1] + '/' + p[0] : d; }
 function fnum(n) { const v = parseInt(n) || 0; return v.toLocaleString('pt-BR'); }
