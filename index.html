@@ -586,8 +586,15 @@ const SUPA_KEY='sb_publishable_yyFwUYtK5D24yeAsd6jkjQ_UuizdNAA';
 const _AUDIT_KEY='tgl_v3_audit'; // linha separada no banco para o log de auditoria (legado)
 const _AUDIT_TABLE='tgl_audit_log'; // tabela dedicada — INSERT atômico por evento
 let _auditLog=[];                     // mantido em memória; nunca entra no payload principal
-const APP_VERSION='1.5.2';
+const APP_VERSION='1.6.0';
 const APP_CHANGELOG={
+  '1.6.0':[
+    'Supabase Auth: login agora obtém JWT real via signInWithPassword — todas as chamadas ao banco usam o token autenticado, com renovação automática a cada 50 minutos e fallback para anon key se o usuário ainda não foi criado no Auth',
+    'Kit/Conjunto: produtos podem ser marcados como kit composto por N componentes (produção + revenda); OP Review mostra sub-rows de componentes com disponibilidade de estoque em tempo real; expedição desconta automaticamente itens de revenda do estoque',
+    'Requisições de Material: nova aba em Suprimentos com numeração automática (REQ-001), multi-item, vinculação opcional a OP aberta, validação de estoque e debito via RPCs atômicas',
+    'Entradas de NF: nova aba em Suprimentos para registrar entradas de estoque por nota fiscal, com Nº NF, OC, fornecedor e itens dinâmicos de MP ou Embalagem',
+    'Saídas de estoque vinculadas a OPs: histórico de MP e Embalagens agora mostra "Saída Revenda OP #1234" com rastreabilidade completa por pedido',
+  ],
   '1.5.2':[
     'Correção crítica: lançamentos de MP e Embalagens (entradas, saídas, inventários) agora salvam no banco de produção correto — desde v1.4.7 estavam gravando em tabela de desenvolvimento e sumiam após login',
   ],
