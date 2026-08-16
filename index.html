@@ -825,7 +825,8 @@ let _lastSavedSuppStr={};
 let _lastSavedUsersStr={};
 
 async function _sf(path,opts={}){
-  return fetch(SUPA_URL+path,{...opts,headers:{apikey:SUPA_KEY,Authorization:'Bearer '+SUPA_KEY,'Content-Type':'application/json',...(opts.headers||{})}});
+  const tok=window._supaJwt||SUPA_KEY;
+  return fetch(SUPA_URL+path,{...opts,headers:{apikey:SUPA_KEY,Authorization:'Bearer '+tok,'Content-Type':'application/json',...(opts.headers||{})}});
 }
 
 async function _loadOps(){
@@ -1304,7 +1305,7 @@ function setSyncBadge(ok){
 
 function gdb(){return _db||idb();}
 function sdb(d){_db=d;try{localStorage.setItem('tgl_bk',JSON.stringify(d));}catch{}saveDBRemote(d);}
-function idb(){return{users:[{id:'u1',name:'Administrador',email:'admin@tgltelecom.com.br',password:'admin123',role:'admin',firstAccess:false,pending:false}],clients:[],products:[],ops:[],stock:{},seq:1000,presence:{},auditLog:[],alerts:{},forceLogout:{},rawMaterials:[],packaging:[],suppliers:[],rawMaterialStock:{},packagingStock:{},rawMaterialMovements:[],packagingMovements:[],purchaseOrders:[],notifications:[]};}
+function idb(){return{users:[{id:'u1',name:'Administrador',email:'admin@tgltelecom.com.br',password:'admin123',role:'admin',firstAccess:false,pending:false}],clients:[],products:[],ops:[],stock:{},seq:1000,presence:{},auditLog:[],alerts:{},forceLogout:{},rawMaterials:[],packaging:[],suppliers:[],rawMaterialStock:{},packagingStock:{},rawMaterialMovements:[],packagingMovements:[],purchaseOrders:[],notifications:[],requisicoes:[],compras:[]};}
 function uid(){return '_'+Math.random().toString(36).substr(2,9);}
 function logAction(d,action,details){
   if(!S)return;
@@ -1355,7 +1356,43 @@ async function doLogin(){
   // Re-read user in case _db was refreshed during await
   u=gdb().users.find(x=>x.email.toLowerCase()===em.toLowerCase()&&!x.pending)||u;
   if(u.firstAccess){_faUser=u;showLF('first');return;}
+  // v1.6.0: Supabase Auth — obter JWT real (graceful degradation se usuário não criado ainda)
+  await _supaAuthLogin(em,pw);
   startApp(u);
+}
+
+// Tenta obter JWT do Supabase Auth; armazena em window._supaJwt se bem-sucedido
+async function _supaAuthLogin(email,password){
+  try{
+    const r=await fetch(SUPA_URL+'/auth/v1/token?grant_type=password',{
+      method:'POST',
+      headers:{'apikey':SUPA_KEY,'Content-Type':'application/json'},
+      body:JSON.stringify({email,password})
+    });
+    if(!r.ok)return; // usuário não criado no Supabase Auth ainda — continua sem JWT
+    const data=await r.json();
+    if(data.access_token){
+      window._supaJwt=data.access_token;
+      window._supaRefreshToken=data.refresh_token;
+      // Renovar JWT automaticamente a cada 50 minutos (expire padrão = 60min)
+      if(window._supaRefreshTimer)clearInterval(window._supaRefreshTimer);
+      window._supaRefreshTimer=setInterval(_supaRefreshJwt,50*60*1000);
+    }
+  }catch(e){/* sem conexão ou auth não configurado — ignora */}
+}
+
+async function _supaRefreshJwt(){
+  if(!window._supaRefreshToken)return;
+  try{
+    const r=await fetch(SUPA_URL+'/auth/v1/token?grant_type=refresh_token',{
+      method:'POST',
+      headers:{'apikey':SUPA_KEY,'Content-Type':'application/json'},
+      body:JSON.stringify({refresh_token:window._supaRefreshToken})
+    });
+    if(!r.ok){window._supaJwt=null;window._supaRefreshToken=null;return;}
+    const data=await r.json();
+    if(data.access_token){window._supaJwt=data.access_token;window._supaRefreshToken=data.refresh_token;}
+  }catch(e){}
 }
 
 async function doFirstAccess(){
@@ -1430,7 +1467,11 @@ function _dismissChangelog(){
 
 (function(){const vl=document.getElementById('ver-lbl');if(vl)vl.textContent='v'+APP_VERSION;})();
 function doLogout(){
-  S=null;_loginAt=0;el('app').classList.remove('on');el('login-screen').style.display='flex';
+  S=null;_loginAt=0;
+  // v1.6.0: limpar JWT do Supabase Auth
+  window._supaJwt=null;window._supaRefreshToken=null;
+  if(window._supaRefreshTimer){clearInterval(window._supaRefreshTimer);window._supaRefreshTimer=null;}
+  el('app').classList.remove('on');el('login-screen').style.display='flex';
   showLF('login');el('l-email').value='';el('l-pw').value='';
 }
 // ─── ALERTS ───────────────────────────────────────────────────────────────────
@@ -2469,6 +2510,9 @@ function sortProd(col){
 }
 function openProdForm(id){
   const d=gdb(),p=id?d.products.find(x=>x.id===id):null;
+  // v1.6.0: inicializa componentes do kit
+  window._kitComps=(p&&p.isKit&&p.kitComponents)?p.kitComponents.map(function(c){return{productId:c.productId,qty:c.qty||1};}):[];
+  const kitHidden=!(p&&p.isKit);
   Mopen(p?'Editar Produto':'Novo Produto',
     '<div class="fg"><label>Nome do Produto *</label><input type="text" id="pf-name" value="'+esc(p?p.name:'')+'" placeholder="Ex: ALCA PRF AC CCE 6,80mm"></div>'+
     '<div class="fgrid">'+
@@ -2483,9 +2527,45 @@ function openProdForm(id){
     '<label class="ck-row"><input type="checkbox" name="pf-sec" value="preformados" '+(p&&(p.sectors||[]).includes('preformados')?'checked':'')+'>  🧵 Preformados</label>'+
     '<label class="ck-row"><input type="checkbox" name="pf-sec" value="estamparia" '+(p&&(p.sectors||[]).includes('estamparia')?'checked':'')+'>  🔩 Ferragens (Estamparia)</label>'+
     '<label class="ck-row"><input type="checkbox" name="pf-sec" value="espinar" '+(p&&(p.sectors||[]).includes('espinar')?'checked':'')+'>  🔌 Espinar/Fita</label>'+
-    '</div></div></div>',
+    '</div></div></div>'+
+    // v1.6.0: Kit/Conjunto
+    '<div style="margin-top:16px;border-top:1px solid var(--border);padding-top:14px">'+
+    '<label class="ck-row"><input type="checkbox" id="pf-kit" '+(p&&p.isKit?'checked':'')+' onchange="togKit()"> 🔗 É um Kit/Conjunto (composto por N componentes)</label>'+
+    '<div id="pf-kit-section" style="margin-top:12px;display:'+(kitHidden?'none':'block')+'">'+
+      '<div style="font-size:12px;color:var(--muted);margin-bottom:8px">Componentes do kit (produtos existentes + quantidade por unidade do kit):</div>'+
+      '<div id="pf-kit-list"></div>'+
+      '<button class="btn btn-ghost btn-sm" style="margin-top:6px" onclick="_kitAddComp()">➕ Adicionar Componente</button>'+
+    '</div></div>',
     '<button class="btn btn-ghost" onclick="Mclose()">Cancelar</button><button class="btn btn-green" onclick="saveProd(\''+( id||'')+'\')">Salvar</button>'
   );
+  if(p&&p.isKit)_kitRenderComps(d);
+}
+function togKit(){
+  const ch=el('pf-kit'),sec=el('pf-kit-section');if(!sec)return;
+  sec.style.display=ch.checked?'block':'none';
+  if(ch.checked&&!(window._kitComps||[]).length)_kitAddComp();
+}
+function _kitAddComp(){
+  window._kitComps=window._kitComps||[];
+  window._kitComps.push({productId:'',qty:1});
+  _kitRenderComps(gdb());
+}
+function _kitRenderComps(d){
+  const list=el('pf-kit-list');if(!list)return;
+  list.innerHTML=(window._kitComps||[]).map(function(c,i){
+    var opts=d.products.map(function(pr){
+      return'<option value="'+esc(pr.id)+'" '+(c.productId===pr.id?'selected':'')+'>'+esc(pr.name+(pr.sku?' ['+pr.sku+']':''))+'</option>';
+    }).join('');
+    return'<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:8px">'+
+      '<div style="flex:1"><label class="form-label">Produto componente</label>'+
+        '<select class="sinput" style="width:100%;box-sizing:border-box" onchange="_kitComps['+i+'].productId=this.value">'+
+          '<option value="">— Selecionar produto —</option>'+opts+
+        '</select></div>'+
+      '<div style="min-width:70px"><label class="form-label">Qtd/kit</label>'+
+        '<input type="number" min="1" step="1" class="sinput" style="width:70px;box-sizing:border-box" value="'+(c.qty||1)+'" onchange="_kitComps['+i+'].qty=parseInt(this.value)||1"></div>'+
+      '<button class="btn btn-ghost btn-sm" style="color:var(--danger);margin-bottom:2px" onclick="_kitComps.splice('+i+',1);_kitRenderComps(gdb())">🗑️</button>'+
+    '</div>';
+  }).join('');
 }
 function togSectors(){
   const t=document.querySelector('input[name="pf-tipo"]:checked');
@@ -2498,13 +2578,18 @@ function saveProd(id){
   const isStock=tipo==='estoque';
   const sectors=isStock?[]:Array.from(document.querySelectorAll('input[name="pf-sec"]:checked')).map(c=>c.value);
   if(!isStock&&!sectors.length){toast('Selecione ao menos um setor','err');return;}
+  // v1.6.0: Kit/Conjunto
+  const kitEl=el('pf-kit');
+  const isKit=!!(kitEl&&kitEl.checked);
+  const kitComponents=isKit?(window._kitComps||[]).filter(function(c){return c.productId&&c.qty>0;}):[];
+  if(isKit&&!kitComponents.length){toast('Adicione pelo menos 1 componente ao kit','err');return;}
   const d=gdb();
   if(sku){const dupSku=d.products.find(x=>x.sku&&x.sku.toUpperCase()===sku.toUpperCase()&&x.id!==id);if(dupSku){toast('SKU "'+sku+'" já está em uso por "'+dupSku.name+'"','err');return;}}
   const dupName=d.products.find(x=>x.name.trim().toLowerCase()===name.toLowerCase()&&x.id!==id);
   if(dupName){toast('Já existe um produto com esse nome','err');return;}
-  if(id){const i=d.products.findIndex(x=>x.id===id);d.products[i]={...d.products[i],name,sku,unit,isStock,sectors};}
-  else d.products.push({id:uid(),name,sku,unit,isStock,sectors});
-  logAction(d,id?'Produto editado':'Produto criado','['+sku+'] '+name);
+  if(id){const i=d.products.findIndex(x=>x.id===id);d.products[i]={...d.products[i],name,sku,unit,isStock,sectors,isKit,kitComponents};}
+  else d.products.push({id:uid(),name,sku,unit,isStock,sectors,isKit,kitComponents});
+  logAction(d,id?'Produto editado':'Produto criado','['+sku+'] '+name+(isKit?' [KIT '+kitComponents.length+' comp.]':''));
   sdb(d);Mclose();toast('Produto salvo!','ok');tabProd();
 }
 function delProd(id){
@@ -3017,6 +3102,27 @@ function renderRV(){
     const isPref=p&&!p.isStock&&(p.sectors||[]).includes('preformados');
     const isEspin=p&&!p.isStock&&(p.sectors||[]).includes('espinar');
     const hasPersonal=isPref||isEspin;
+    // v1.6.0: sub-rows de kit
+    const isKit=p&&p.isKit&&(p.kitComponents||[]).length>0;
+    const kitBadge=isKit?'<span style="font-size:10px;padding:2px 5px;border-radius:3px;background:rgba(139,92,246,.2);color:#c4b5fd;margin-left:6px">KIT</span>':'';
+    let kitRows='';
+    if(isKit){
+      kitRows=(p.kitComponents||[]).map(comp=>{
+        const cp=d.products.find(x=>x.id===comp.productId);if(!cp)return'';
+        const cqty=(item.qty||1)*(comp.qty||1);
+        const cstk=cp.isStock?getStock(comp.productId,cqty):null;
+        const typeBadge=cp.isStock?'<span style="font-size:10px;padding:1px 4px;border-radius:3px;background:rgba(99,102,241,.15);color:var(--accent)">Revenda</span>':'<span style="font-size:10px;padding:1px 4px;border-radius:3px;background:rgba(34,197,94,.1);color:var(--green)">Produção</span>';
+        return`<tr style="background:rgba(255,255,255,.02)">
+          <td colspan="2" style="padding-left:36px;font-size:12px;color:var(--muted)">
+            <span style="margin-right:4px">↳</span>${esc(cp.name)}${cp.sku?' <span class="sku" style="font-size:11px">'+esc(cp.sku)+'</span>':''} ${typeBadge}
+          </td>
+          <td style="text-align:center;font-size:12px"><strong>${cqty}</strong></td>
+          <td style="font-size:12px">${esc(cp.unit||'PC')}</td>
+          <td style="font-size:12px">${cstk?'<span class="'+cstk.cls+'"><span class="sem-dot"></span>'+cstk.label+'</span>':'<span style="color:var(--muted)">—</span>'}</td>
+          <td colspan="3"></td>
+        </tr>`;
+      }).join('');
+    }
     return `<tr>
       <td style="position:relative;min-width:220px">
         <div class="ac-wrap">
@@ -3025,10 +3131,10 @@ function renderRV(){
           <div class="ac-drop" id="rv-acd-${i}" style="display:none">${opts}</div>
         </div>
       </td>
-      <td><span class="sku" id="rv-sku-${i}">${esc(item.sku||'—')}</span></td>
+      <td><span class="sku" id="rv-sku-${i}">${esc(item.sku||'—')}</span>${kitBadge}</td>
       <td><input type="number" class="rt-input rt-num" value="${item.qty||1}" min="1" onchange="_draft.items[${i}].qty=+this.value;renderRV()"></td>
       <td><input type="text" class="rt-input" style="width:60px" value="${esc(item.unit||'PC')}" onchange="_draft.items[${i}].unit=this.value"></td>
-      <td>${p&&p.isStock?'<span class="'+sem.cls+'"><span class="sem-dot"></span>'+sem.label+'</span>':'—'}</td>
+      <td>${p&&p.isStock?'<span class="'+sem.cls+'"><span class="sem-dot"></span>'+sem.label+'</span>':isKit?'<span style="color:var(--muted);font-size:12px">Kit↓</span>':'—'}</td>
       <td><input type="text" class="rt-input" style="min-width:120px" placeholder="Obs do item..." value="${esc(item.obs||'')}" onchange="_draft.items[${i}].obs=this.value"></td>
       <td style="min-width:160px">${hasPersonal?`<div style="display:flex;flex-direction:column;gap:4px;font-size:12px">
         <label style="cursor:pointer"><input type="checkbox" ${item.etiqueta?'checked':''} onchange="_draft.items[${i}].etiqueta=this.checked"> 🏷️ Etiqueta c/ logo</label>
@@ -3036,7 +3142,7 @@ function renderRV(){
         ${isPref?`<label style="cursor:pointer"><input type="checkbox" ${item.gravacao?'checked':''} onchange="_draft.items[${i}].gravacao=this.checked"> ✏️ Gravação personalizada</label>`:''}
       </div>`:'<span style="color:var(--muted);font-size:12px">—</span>'}</td>
       <td><button class="btn btn-danger btn-sm" onclick="_draft.items.splice(${i},1);renderRV()">✕</button></td>
-    </tr>`;
+    </tr>${kitRows}`;
   }).join('');
 }
 
@@ -3671,7 +3777,7 @@ function rSuprimentos(cnt){
   const _curSst=_activeSst?_activeSst.replace('sst-',''):null;
   const tabs=isCmp
     ?'<button class="stab on" id="sst-mp" onclick="sstab(\'mp\')">🌿 Matéria Prima</button><button class="stab" id="sst-emb" onclick="sstab(\'emb\')">📦 Embalagens</button><button class="stab" id="sst-est" onclick="sstab(\'est\')">🏷️ Estoque Produtos</button>'
-    :'<button class="stab on" id="sst-est" onclick="sstab(\'est\')">🏷️ Estoque</button><button class="stab" id="sst-mp" onclick="sstab(\'mp\')">🌿 Matéria Prima</button><button class="stab" id="sst-emb" onclick="sstab(\'emb\')">📦 Embalagens</button>';
+    :'<button class="stab on" id="sst-est" onclick="sstab(\'est\')">🏷️ Estoque</button><button class="stab" id="sst-mp" onclick="sstab(\'mp\')">🌿 Matéria Prima</button><button class="stab" id="sst-emb" onclick="sstab(\'emb\')">📦 Embalagens</button><button class="stab" id="sst-req" onclick="sstab(\'req\')">📋 Requisições</button><button class="stab" id="sst-nf" onclick="sstab(\'nf\')">🧾 Entradas NF</button>';
   cnt.innerHTML='<div class="ptitle">📦 Suprimentos</div><div class="stabs">'+tabs+'</div><div id="sup-tabs-c"></div>';
   _supFilter='';_supSort={col:'name',dir:1};
   const _defSst=isCmp?'mp':'est';
@@ -3685,6 +3791,8 @@ function sstab(t){
   if(t==='est'){_supFilter='';renderEstoque();}
   else if(t==='mp')renderSupMP();
   else if(t==='emb')renderSupEmb();
+  else if(t==='req')renderSupReqs();
+  else if(t==='nf')renderSupCompras();
 }
 let _opTipData={};
 function showOpTip(evt,pid){
@@ -4571,7 +4679,18 @@ async function confirmDispatch(id){
     const p=d.products.find(x=>x.id===it.pid);
     if(p&&p.isStock&&d.stock[it.pid]){
       const remaining=_itemQtyLeft(it);
-      if(remaining>0)deductions.push({stockId:'P:'+it.pid,qty:remaining,pid:it.pid});
+      if(remaining>0)deductions.push({stockId:'P:'+it.pid,qty:remaining,pid:it.pid,opNum:d.ops[i].opNum});
+    }
+    // v1.6.0: Kit — descontar componentes de revenda
+    if(p&&p.isKit&&(p.kitComponents||[]).length){
+      const opQty=_itemQtyLeft(it);
+      if(opQty>0)(p.kitComponents||[]).forEach(comp=>{
+        const cp=d.products.find(x=>x.id===comp.productId);
+        if(cp&&cp.isStock&&d.stock[comp.productId]){
+          const needed=opQty*(comp.qty||1);
+          if(needed>0)deductions.push({stockId:'P:'+comp.productId,qty:needed,pid:comp.productId,opNum:d.ops[i].opNum,_fromKit:true,_kitName:p.name});
+        }
+      });
     }
   });
   if(deductions.length>0){
@@ -4583,6 +4702,12 @@ async function confirmDispatch(id){
           const stockData={...(d.stock[pid]||{}),qty:res.new_qty,at:Date.now()};
           d.stock[pid]=stockData;
           _lastSavedStockStr['P:'+pid]=JSON.stringify(stockData);
+          const _p=d.products.find(x=>x.id===pid);
+          if(deductions[ri]._fromKit){
+            logAction(d,'Saída Revenda OP (Kit)',(_p?_p.name:pid)+' — Kit: '+deductions[ri]._kitName+' — OP #'+deductions[ri].opNum+' — '+fnum(deductions[ri].qty)+' un.');
+          }else{
+            logAction(d,'Saída Revenda OP',(_p?_p.name:pid)+' — OP #'+deductions[ri].opNum+' — '+fnum(deductions[ri].qty)+' un.');
+          }
         }
       });
     }catch(e){
@@ -4665,7 +4790,17 @@ async function confirmParcial(id){
     if(!item.stageLog)item.stageLog=[];
     item.stageLog.push({status:'despachado_parcial',at:Date.now(),qty});
     const p=d.products.find(x=>x.id===item.pid);
-    if(p&&p.isStock&&d.stock[item.pid])deductions.push({stockId:'P:'+item.pid,qty,pid:item.pid});
+    if(p&&p.isStock&&d.stock[item.pid])deductions.push({stockId:'P:'+item.pid,qty,pid:item.pid,opNum:d.ops[oi].opNum});
+    // v1.6.0: Kit — descontar componentes de revenda no parcial
+    if(p&&p.isKit&&(p.kitComponents||[]).length){
+      (p.kitComponents||[]).forEach(comp=>{
+        const cp=d.products.find(x=>x.id===comp.productId);
+        if(cp&&cp.isStock&&d.stock[comp.productId]){
+          const needed=qty*(comp.qty||1);
+          if(needed>0)deductions.push({stockId:'P:'+comp.productId,qty:needed,pid:comp.productId,opNum:d.ops[oi].opNum,_fromKit:true,_kitName:p.name});
+        }
+      });
+    }
   });
   const totalQty=selectedItems.reduce((s,x)=>s+x.qty,0);
   logAction(d,'Despacho parcial',d.ops[oi].opNum+' — '+selectedItems.length+' item(s) · '+totalQty+' un. · NF: '+(nfeNumber||'—'));
@@ -4678,6 +4813,12 @@ async function confirmParcial(id){
           const stockData={...(d.stock[pid]||{}),qty:res.new_qty,at:Date.now()};
           d.stock[pid]=stockData;
           _lastSavedStockStr['P:'+pid]=JSON.stringify(stockData);
+          const _p2=d.products.find(x=>x.id===pid);
+          if(deductions[ri]._fromKit){
+            logAction(d,'Saída Revenda OP (Kit)',(_p2?_p2.name:pid)+' — Kit: '+deductions[ri]._kitName+' — OP #'+deductions[ri].opNum+' — '+fnum(deductions[ri].qty)+' un.');
+          }else{
+            logAction(d,'Saída Revenda OP',(_p2?_p2.name:pid)+' — OP #'+deductions[ri].opNum+' — '+fnum(deductions[ri].qty)+' un.');
+          }
         }
       });
     }catch(e){
@@ -6335,6 +6476,299 @@ function _kpiCard(label,val,sub,color,bg){
     '<div style="font-size:26px;font-weight:800;color:'+color+';line-height:1">'+fnum(val)+'</div>'+
     '<div style="font-size:11px;color:var(--muted);margin-top:4px">'+sub+'</div>'+
   '</div>';
+}
+
+// ─── ENTRADAS DE NF ──────────────────────────────────────────────────────────
+function renderSupCompras(){
+  const c=el('sup-c');if(!c)return;
+  const d=gdb();
+  const lista=(d.compras||[]).slice().reverse();
+  c.innerHTML='<div class="card"><div class="card-header"><div class="card-title">🧾 Entradas de NF</div>'+
+    '<button class="btn btn-green btn-sm" onclick="openNovaEntradaNF()">➕ Nova Entrada NF</button>'+
+    '</div>'+
+    (lista.length?'<div class="tw"><table><thead><tr>'+
+      '<th>Nº NF</th><th>OC</th><th>Fornecedor</th><th>Itens</th><th>Usuário</th><th>Data</th>'+
+    '</tr></thead><tbody>'+
+    lista.map(c2=>'<tr>'+
+      '<td><strong>'+esc(c2.nfe||'—')+'</strong></td>'+
+      '<td>'+(c2.ocNum?esc(c2.ocNum):'<span style="color:var(--muted)">—</span>')+'</td>'+
+      '<td>'+esc(c2.supplierName||'—')+'</td>'+
+      '<td>'+c2.items.length+' item(s)</td>'+
+      '<td style="font-size:12px">'+esc(c2.createdBy||'—')+'</td>'+
+      '<td style="font-size:12px">'+fdate(c2.createdAt)+'</td>'+
+    '</tr>').join('')+
+    '</tbody></table></div>'+
+    '<div style="padding:8px 16px;font-size:12px;color:var(--muted)">'+lista.length+' entrada(s) registrada(s)</div>':
+    '<div class="empty"><div class="ei">🧾</div><p>Nenhuma entrada de NF registrada</p></div>')+
+  '</div>';
+}
+
+function openNovaEntradaNF(){
+  const d=gdb();
+  const sups=d.suppliers||[];
+  const supOpts=sups.map(s=>'<option value="'+esc(s.id)+'">'+esc(s.name)+'</option>').join('');
+  Mopen('🧾 Nova Entrada de NF',
+    '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">'+
+      '<div style="flex:1;min-width:120px"><label class="form-label">Nº NF</label>'+
+        '<input id="nf-nfe" class="sinput" style="width:100%;box-sizing:border-box" placeholder="Ex: 001234"></div>'+
+      '<div style="flex:1;min-width:120px"><label class="form-label">Nº Pedido de Compra</label>'+
+        '<input id="nf-oc" class="sinput" style="width:100%;box-sizing:border-box" placeholder="Opcional"></div>'+
+    '</div>'+
+    '<div style="margin-bottom:14px"><label class="form-label">Fornecedor</label>'+
+      '<select id="nf-sup" class="sinput" style="width:100%;box-sizing:border-box">'+
+        '<option value="">— Selecione o fornecedor —</option>'+supOpts+
+      '</select></div>'+
+    '<div style="margin-bottom:10px;font-weight:600;font-size:14px">Itens da NF</div>'+
+    '<div id="nf-items-list"></div>'+
+    '<button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="_nfAddItem()">➕ Adicionar Item</button>',
+    '<button class="btn btn-ghost" onclick="Mclose()">Cancelar</button>'+
+    '<button class="btn btn-green" onclick="_nfConfirmar()">✅ Confirmar Entrada</button>'
+  );
+  window._nfItems=[];
+  _nfAddItem();
+}
+
+function _nfAddItem(){
+  const d=gdb();
+  const idx=(window._nfItems||[]).length;
+  window._nfItems=window._nfItems||[];
+  window._nfItems.push({type:'MP',itemId:'',itemName:'',unit:'KG',qty:0,supplierId:''});
+  const list=el('nf-items-list');if(!list)return;
+  _nfRenderItems(d);
+}
+
+function _nfRenderItems(d){
+  const list=el('nf-items-list');if(!list)return;
+  const items=window._nfItems||[];
+  list.innerHTML=items.map(function(it,i){
+    var rmOpts=d.rawMaterials.map(function(m){return'<option value="MP|'+esc(m.id)+'|'+esc(m.unit||'KG')+'|'+esc(m.id)+'" '+(it.type==='MP'&&it.itemId===m.id?'selected':'')+'>🌿 '+esc(m.name)+'</option>';}).join('');
+    var pkOpts=d.packaging.map(function(p){return'<option value="PK|'+esc(p.id)+'|'+esc(p.unit||'UN')+'|'+esc(p.id)+'" '+(it.type==='PK'&&it.itemId===p.id?'selected':'')+'>📦 '+esc(p.name)+'</option>';}).join('');
+    var supSel=(it.type==='MP'&&it.supplierId)?it.supplierId:'';
+    var supOpts=(d.suppliers||[]).map(function(s){return'<option value="'+esc(s.id)+'" '+(supSel===s.id?'selected':'')+'>'+esc(s.name)+'</option>';}).join('');
+    var dispSup=it.type==='MP'?'block':'none';
+    var unitLabel=it.unit||'UN';
+    return '<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:10px;flex-wrap:wrap;border-bottom:1px solid rgba(255,255,255,.06);padding-bottom:10px">'+
+      '<div style="flex:2;min-width:160px"><label class="form-label">Item</label>'+
+        '<select class="sinput" style="width:100%;box-sizing:border-box" onchange="_nfItemSelect('+i+',this.value)">'+
+          '<option value="">— MP ou Embalagem —</option>'+rmOpts+pkOpts+
+        '</select></div>'+
+      '<div style="flex:1;min-width:100px" id="nf-sup-wrap-'+i+'" style="display:'+dispSup+'">'+
+        '<label class="form-label">Fornecedor</label>'+
+        '<select class="sinput" style="width:100%;box-sizing:border-box" onchange="_nfItems['+i+'].supplierId=this.value">'+
+          '<option value="">—</option>'+supOpts+
+        '</select></div>'+
+      '<div style="min-width:80px"><label class="form-label">Qtd ('+esc(unitLabel)+')</label>'+
+        '<input type="number" min="0" step="0.001" class="sinput" style="width:80px;box-sizing:border-box" value="'+(it.qty||'')+'" onchange="_nfItems['+i+'].qty=parseFloat(this.value)||0"></div>'+
+      '<button class="btn btn-ghost btn-sm" style="color:var(--danger);margin-bottom:2px" onclick="_nfRemItem('+i+')">🗑️</button>'+
+    '</div>';
+  }).join('');
+}
+
+function _nfItemSelect(i,val){
+  if(!val){window._nfItems[i].itemId='';window._nfItems[i].itemName='';return;}
+  const parts=val.split('|');
+  const type=parts[0],itemId=parts[1],unit=parts[2];
+  const d=gdb();
+  let itemName='';
+  if(type==='MP'){const m=d.rawMaterials.find(x=>x.id===itemId);itemName=m?m.name:itemId;}
+  else{const p=d.packaging.find(x=>x.id===itemId);itemName=p?p.name:itemId;}
+  window._nfItems[i].type=type;
+  window._nfItems[i].itemId=itemId;
+  window._nfItems[i].itemName=itemName;
+  window._nfItems[i].unit=unit;
+  window._nfItems[i].supplierId='';
+  // mostrar/ocultar coluna de fornecedor
+  const sw=el('nf-sup-wrap-'+i);
+  if(sw)sw.style.display=(type==='MP')?'block':'none';
+}
+
+function _nfRemItem(i){
+  window._nfItems.splice(i,1);
+  _nfRenderItems(gdb());
+}
+
+async function _nfConfirmar(){
+  const nfe=(el('nf-nfe').value||'').trim();
+  const oc=(el('nf-oc').value||'').trim();
+  const supEl=el('nf-sup');
+  const supplierId=supEl?supEl.value:'';
+  const supplierName=supplierId?(gdb().suppliers||[]).find(s=>s.id===supplierId)?.name||supplierId:'';
+  const items=(window._nfItems||[]).filter(it=>it.itemId&&it.qty>0);
+  if(!items.length){toast('Adicione pelo menos 1 item com quantidade','warn');return;}
+  const btn=document.querySelector('#mfooter .btn-green');if(btn){btn.disabled=true;btn.textContent='Salvando...';}
+  try{
+    const d=gdb();
+    const entrada={id:uid(),nfe,ocNum:oc,supplierId,supplierName,createdAt:Date.now(),createdBy:S?S.name:'',items};
+    for(const it of items){
+      if(it.type==='MP'){
+        const sid=it.supplierId||supplierId||'avulso';
+        await _rpcRMAdjust(it.itemId,sid,it.qty);
+        logAction(d,'Entrada MP',it.itemName+' +'+fnum(it.qty)+' '+(it.unit||'KG')+(nfe?' — NF '+nfe:'')+(oc?' / OC '+oc:''));
+      }else{
+        await _rpcPKAdjust(it.itemId,it.qty);
+        logAction(d,'Entrada Emb',it.itemName+' +'+fnum(it.qty)+' '+(it.unit||'UN')+(nfe?' — NF '+nfe:'')+(oc?' / OC '+oc:''));
+      }
+    }
+    if(!d.compras)d.compras=[];
+    d.compras.push(entrada);
+    await sdb(d);
+    Mclose();
+    toast('Entrada de NF registrada com sucesso!','ok');
+    renderSupCompras();
+  }catch(e){
+    toast('Erro ao salvar: '+e.message,'err');
+    if(btn){btn.disabled=false;btn.textContent='✅ Confirmar Entrada';}
+  }
+}
+
+// ─── REQUISIÇÕES DE MATERIAL ──────────────────────────────────────────────────
+function renderSupReqs(){
+  const c=el('sup-c');if(!c)return;
+  const d=gdb();
+  const lista=(d.requisicoes||[]).slice().reverse();
+  c.innerHTML='<div class="card"><div class="card-header"><div class="card-title">📋 Requisições de Material</div>'+
+    '<button class="btn btn-green btn-sm" onclick="openNovaReq()">➕ Nova Requisição</button>'+
+    '</div>'+
+    (lista.length?'<div class="tw"><table><thead><tr>'+
+      '<th>Nº Req.</th><th>Vinculada a OP</th><th>Itens</th><th>Usuário</th><th>Data/Hora</th>'+
+    '</tr></thead><tbody>'+
+    lista.map(r=>'<tr>'+
+      '<td><strong>'+esc(r.num||'—')+'</strong></td>'+
+      '<td>'+(r.opNum?'OP #'+esc(r.opNum):'<span style="color:var(--muted)">—</span>')+'</td>'+
+      '<td>'+r.items.length+' item(s)</td>'+
+      '<td style="font-size:12px">'+esc(r.createdBy||'—')+'</td>'+
+      '<td style="font-size:12px">'+fdatetime(r.createdAt)+'</td>'+
+    '</tr>').join('')+
+    '</tbody></table></div>'+
+    '<div style="padding:8px 16px;font-size:12px;color:var(--muted)">'+lista.length+' requisição(ões) registrada(s)</div>':
+    '<div class="empty"><div class="ei">📋</div><p>Nenhuma requisição registrada</p></div>')+
+  '</div>';
+}
+
+function openNovaReq(){
+  const d=gdb();
+  const ops=(d.ops||[]).filter(o=>o.status!=='finalizado').slice(-50);
+  const opOpts=ops.map(o=>'<option value="'+esc(o.id)+'|'+esc(o.opNum)+'">OP #'+esc(o.opNum)+' — '+esc(o.clientName||'')+'</option>').join('');
+  const nextNum='REQ-'+String((d.requisicoes||[]).length+1).padStart(3,'0');
+  Mopen('📋 Nova Requisição — '+nextNum,
+    '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">'+
+      '<div style="flex:1;min-width:160px"><label class="form-label">Vinculada a OP (opcional)</label>'+
+        '<select id="req-op" class="sinput" style="width:100%;box-sizing:border-box">'+
+          '<option value="">— Nenhuma —</option>'+opOpts+
+        '</select></div>'+
+    '</div>'+
+    '<div style="margin-bottom:10px;font-weight:600;font-size:14px">Itens solicitados</div>'+
+    '<div id="req-items-list"></div>'+
+    '<button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="_reqAddItem()">➕ Adicionar Item</button>',
+    '<button class="btn btn-ghost" onclick="Mclose()">Cancelar</button>'+
+    '<button class="btn btn-outline" onclick="_reqConfirmar()">✅ Confirmar Requisição</button>'
+  );
+  window._reqItems=[];
+  _reqAddItem();
+}
+
+function _reqAddItem(){
+  window._reqItems=window._reqItems||[];
+  window._reqItems.push({type:'MP',itemId:'',itemName:'',unit:'KG',qty:0,supplierId:''});
+  _reqRenderItems(gdb());
+}
+
+function _reqRenderItems(d){
+  const list=el('req-items-list');if(!list)return;
+  const items=window._reqItems||[];
+  list.innerHTML=items.map(function(it,i){
+    var rmOpts=d.rawMaterials.map(function(m){return'<option value="MP|'+esc(m.id)+'|'+esc(m.unit||'KG')+'|'+esc(m.id)+'" '+(it.type==='MP'&&it.itemId===m.id?'selected':'')+'>🌿 '+esc(m.name)+'</option>';}).join('');
+    var pkOpts=d.packaging.map(function(p){return'<option value="PK|'+esc(p.id)+'|'+esc(p.unit||'UN')+'|'+esc(p.id)+'" '+(it.type==='PK'&&it.itemId===p.id?'selected':'')+'>📦 '+esc(p.name)+'</option>';}).join('');
+    var supOpts=(d.suppliers||[]).map(function(s){return'<option value="'+esc(s.id)+'" '+(it.supplierId===s.id?'selected':'')+'>'+esc(s.name)+'</option>';}).join('');
+    var unitLabel=it.unit||'UN';
+    return '<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:10px;flex-wrap:wrap;border-bottom:1px solid rgba(255,255,255,.06);padding-bottom:10px">'+
+      '<div style="flex:2;min-width:160px"><label class="form-label">Item</label>'+
+        '<select class="sinput" style="width:100%;box-sizing:border-box" onchange="_reqItemSelect('+i+',this.value)">'+
+          '<option value="">— MP ou Embalagem —</option>'+rmOpts+pkOpts+
+        '</select></div>'+
+      '<div style="flex:1;min-width:100px" id="req-sup-wrap-'+i+'">'+
+        '<label class="form-label">Fornecedor (MP)</label>'+
+        '<select class="sinput" style="width:100%;box-sizing:border-box" onchange="_reqItems['+i+'].supplierId=this.value">'+
+          '<option value="">—</option>'+supOpts+
+        '</select></div>'+
+      '<div style="min-width:80px"><label class="form-label">Qtd ('+esc(unitLabel)+')</label>'+
+        '<input type="number" min="0" step="0.001" class="sinput" style="width:80px;box-sizing:border-box" value="'+(it.qty||'')+'" onchange="_reqItems['+i+'].qty=parseFloat(this.value)||0"></div>'+
+      '<button class="btn btn-ghost btn-sm" style="color:var(--danger);margin-bottom:2px" onclick="_reqRemItem('+i+')">🗑️</button>'+
+    '</div>';
+  }).join('');
+  // ocultar coluna de fornecedor para itens PK
+  items.forEach(function(it,i){
+    var sw=el('req-sup-wrap-'+i);
+    if(sw)sw.style.display=(it.type==='MP')?'block':'none';
+  });
+}
+
+function _reqItemSelect(i,val){
+  if(!val){window._reqItems[i].itemId='';window._reqItems[i].itemName='';return;}
+  const parts=val.split('|');
+  const type=parts[0],itemId=parts[1],unit=parts[2];
+  const d=gdb();
+  let itemName='';
+  if(type==='MP'){const m=d.rawMaterials.find(x=>x.id===itemId);itemName=m?m.name:itemId;}
+  else{const p=d.packaging.find(x=>x.id===itemId);itemName=p?p.name:itemId;}
+  window._reqItems[i].type=type;
+  window._reqItems[i].itemId=itemId;
+  window._reqItems[i].itemName=itemName;
+  window._reqItems[i].unit=unit;
+  window._reqItems[i].supplierId='';
+  const sw=el('req-sup-wrap-'+i);
+  if(sw)sw.style.display=(type==='MP')?'block':'none';
+}
+
+function _reqRemItem(i){
+  window._reqItems.splice(i,1);
+  _reqRenderItems(gdb());
+}
+
+async function _reqConfirmar(){
+  const opEl=el('req-op');
+  const opVal=opEl?opEl.value:'';
+  let opId='',opNum='';
+  if(opVal){const parts=opVal.split('|');opId=parts[0]||'';opNum=parts[1]||'';}
+  const items=(window._reqItems||[]).filter(it=>it.itemId&&it.qty>0);
+  if(!items.length){toast('Adicione pelo menos 1 item com quantidade','warn');return;}
+  const btn=document.querySelector('#mfooter .btn-outline');if(btn){btn.disabled=true;btn.textContent='Salvando...';}
+  try{
+    const d=gdb();
+    if(!d.requisicoes)d.requisicoes=[];
+    const num='REQ-'+String(d.requisicoes.length+1).padStart(3,'0');
+    const req={id:uid(),num,createdAt:Date.now(),createdBy:S?S.name:'',opId,opNum,status:'confirmada',items};
+    for(const it of items){
+      if(it.type==='MP'){
+        const sid=it.supplierId||'avulso';
+        const stk=d.rawMaterialStock[it.itemId];
+        const curQty=stk?Object.values(stk.bySupplier||{}).reduce((a,b)=>a+b,0):0;
+        if(curQty<it.qty){toast('Estoque insuficiente para '+it.itemName+' (disponível: '+fnum(curQty)+' '+it.unit+')','warn');if(btn){btn.disabled=false;btn.textContent='✅ Confirmar Requisição';}return;}
+        await _rpcRMAdjust(it.itemId,sid,-it.qty);
+        logAction(d,'Saída MP',it.itemName+' -'+fnum(it.qty)+' '+(it.unit||'KG')+' — '+num+(opNum?' / OP #'+opNum:''));
+      }else{
+        const curQty=d.packagingStock[it.itemId]||0;
+        if(curQty<it.qty){toast('Estoque insuficiente para '+it.itemName+' (disponível: '+fnum(curQty)+' '+it.unit+')','warn');if(btn){btn.disabled=false;btn.textContent='✅ Confirmar Requisição';}return;}
+        await _rpcPKAdjust(it.itemId,-it.qty);
+        logAction(d,'Saída Emb',it.itemName+' -'+fnum(it.qty)+' '+(it.unit||'UN')+' — '+num+(opNum?' / OP #'+opNum:''));
+      }
+    }
+    d.requisicoes.push(req);
+    await sdb(d);
+    Mclose();
+    toast(num+' registrada com sucesso!','ok');
+    renderSupReqs();
+  }catch(e){
+    toast('Erro ao salvar: '+e.message,'err');
+    if(btn){btn.disabled=false;btn.textContent='✅ Confirmar Requisição';}
+  }
+}
+
+// helper: data + hora
+function fdatetime(ts){
+  if(!ts)return'—';
+  const dt=new Date(ts);
+  return dt.toLocaleDateString('pt-BR')+' '+dt.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
 }
 
 // ─── Alertas de estoque crítico de MP — modal no login + notificação no bell ──
