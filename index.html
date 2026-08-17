@@ -2564,7 +2564,7 @@ function _kitRenderComps(d){
     var dispVal=pr?((pr.sku?pr.sku+' | ':'')+pr.name):'';
     return'<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:8px">'+
       '<div style="flex:1;position:relative"><label class="form-label">Produto componente</label>'+
-        '<div class="ac-wrap"><input class="sinput" id="kit-ac-'+i+'" value="'+esc(dispVal)+'" placeholder="🔍 Nome ou SKU do produto..." autocomplete="off" oninput="_kitACFilt('+i+')" onfocus="_kitACFilt('+i+')" onblur="setTimeout(function(){_kitACClose('+i+')},220)">'+
+        '<div class="ac-wrap" style="position:relative"><input class="sinput" id="kit-ac-'+i+'" value="'+esc(dispVal)+'" placeholder="Nome ou SKU do produto..." autocomplete="off" style="width:100%;box-sizing:border-box" oninput="_kitACFilt('+i+')" onfocus="_kitACFilt('+i+')" onblur="setTimeout(function(){_kitACClose('+i+')},220)">'+
         '<div class="ac-drop" id="kit-acd-'+i+'" style="display:none"></div></div></div>'+
       '<div style="min-width:70px"><label class="form-label">Qtd/kit</label>'+
         '<input type="number" min="1" step="1" class="sinput" style="width:70px;box-sizing:border-box" value="'+(c.qty||1)+'" onchange="_kitComps['+i+'].qty=parseInt(this.value)||1"></div>'+
@@ -6527,7 +6527,7 @@ function openNovaEntradaNF(){
   window._nfItems=[];window._nfSupId='';window._nfSupName='';
   Mopen('🧾 Nova Entrada de NF',
     '<div style="margin-bottom:12px"><label class="form-label">Fornecedor</label>'+
-      '<div class="ac-wrap"><input id="nf-sup-inp" class="sinput" style="width:100%;box-sizing:border-box" placeholder="🔍 Digite o fornecedor..." autocomplete="off" oninput="_nfSupFilt()" onfocus="_nfSupFilt()" onblur="setTimeout(_nfSupClose,220)">'+
+      '<div class="ac-wrap" style="position:relative"><input id="nf-sup-inp" class="sinput" style="width:100%;box-sizing:border-box" placeholder="Digite o fornecedor..." autocomplete="off" oninput="_nfSupFilt()" onfocus="_nfSupFilt()" onblur="setTimeout(_nfSupClose,220)">'+
       '<div class="ac-drop" id="nf-sup-drop" style="display:none"></div></div></div>'+
     '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">'+
       '<div style="flex:1;min-width:120px"><label class="form-label">Nº NF</label>'+
@@ -6566,15 +6566,15 @@ function _nfRenderItems(d){
   const list=el('nf-items-list');if(!list)return;
   list.innerHTML=(window._nfItems||[]).map(function(it,i){
     var dispVal=it.itemName?((it.code?it.code+' | ':'')+it.itemName):'';
-    return'<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:10px;flex-wrap:wrap;border-bottom:1px solid rgba(255,255,255,.06);padding-bottom:10px">'+
-      '<div style="flex:2;min-width:180px;position:relative"><label class="form-label">Produto (MP ou Embalagem)</label>'+
-        '<div class="ac-wrap"><input class="sinput" id="nf-ac-'+i+'" value="'+esc(dispVal)+'" placeholder="🔍 Digite o produto..." autocomplete="off" oninput="_nfAC('+i+')" onfocus="_nfAC('+i+')" onblur="setTimeout(function(){_nfACClose('+i+')},220)">'+
+    return'<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:10px;border-bottom:1px solid rgba(255,255,255,.06);padding-bottom:10px">'+
+      '<div style="flex:1;min-width:200px;position:relative"><label class="form-label">Produto (MP / Embalagem / Revenda)</label>'+
+        '<div class="ac-wrap" style="position:relative"><input class="sinput" id="nf-ac-'+i+'" value="'+esc(dispVal)+'" placeholder="Digite o produto..." autocomplete="off" style="width:100%;box-sizing:border-box" oninput="_nfAC('+i+')" onfocus="_nfAC('+i+')" onblur="setTimeout(function(){_nfACClose('+i+')},220)">'+
         '<div class="ac-drop" id="nf-acd-'+i+'" style="display:none"></div></div></div>'+
-      '<div style="min-width:65px"><label class="form-label">U.M.</label>'+
-        '<input class="sinput" id="nf-unit-'+i+'" value="'+esc(it.unit||'')+'" readonly style="width:65px;box-sizing:border-box;background:var(--bg-card2);opacity:.8"></div>'+
-      '<div style="min-width:90px"><label class="form-label">Qtd</label>'+
-        '<input type="number" min="0" step="0.001" class="sinput" style="width:90px;box-sizing:border-box" value="'+(it.qty||'')+'" onchange="_nfItems['+i+'].qty=parseFloat(this.value)||0"></div>'+
-      '<button class="btn btn-ghost btn-sm" style="color:var(--danger);margin-bottom:2px" onclick="_nfItems.splice('+i+',1);_nfRenderItems(gdb())">🗑️</button>'+
+      '<div style="width:70px;flex-shrink:0"><label class="form-label">U.M.</label>'+
+        '<input id="nf-unit-'+i+'" value="'+esc(it.unit||'')+'" readonly style="width:70px;box-sizing:border-box;height:38px;padding:0 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card2);color:var(--muted);font-size:13px"></div>'+
+      '<div style="width:90px;flex-shrink:0"><label class="form-label">Quantidade</label>'+
+        '<input type="number" min="0" step="0.001" id="nf-qty-'+i+'" value="'+(it.qty||'')+'" style="width:90px;box-sizing:border-box;height:38px;padding:0 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input,var(--bg-card));color:var(--text);font-size:13px" onchange="_nfItems['+i+'].qty=parseFloat(this.value)||0"></div>'+
+      '<button class="btn btn-ghost btn-sm" style="color:var(--danger);height:38px;align-self:flex-end" onclick="_nfItems.splice('+i+',1);_nfRenderItems(gdb())">🗑️</button>'+
     '</div>';
   }).join('');
 }
@@ -6582,22 +6582,27 @@ function _nfAC(i){
   const inp=el('nf-ac-'+i),drop=el('nf-acd-'+i);if(!inp||!drop)return;
   const q=inp.value.toLowerCase().trim();
   const d=gdb();
-  const rms=d.rawMaterials.filter(m=>!q||(m.name||'').toLowerCase().includes(q)||(m.code||'').toLowerCase().includes(q)).slice(0,10).map(m=>({id:m.id,name:m.name,code:m.code||'',unit:m.unit||'KG',_t:'MP'}));
-  const pks=d.packaging.filter(p=>!q||(p.name||'').toLowerCase().includes(p.name)||( p.name||'').toLowerCase().includes(q)||(p.code||'').toLowerCase().includes(q)).slice(0,10).map(p=>({id:p.id,name:p.name,code:p.code||'',unit:p.unit||'UN',_t:'PK'}));
-  const all=[...rms,...pks].slice(0,15);
+  const rms=d.rawMaterials.filter(function(m){return!q||(m.name||'').toLowerCase().includes(q)||(m.code||'').toLowerCase().includes(q);}).slice(0,8).map(function(m){return{id:m.id,name:m.name,code:m.code||'',unit:m.unit||'KG',_t:'MP'};});
+  const pks=d.packaging.filter(function(p){return!q||(p.name||'').toLowerCase().includes(q)||(p.code||'').toLowerCase().includes(q);}).slice(0,8).map(function(p){return{id:p.id,name:p.name,code:p.code||'',unit:p.unit||'UN',_t:'PK'};});
+  const revs=d.products.filter(function(p){return p.isStock&&(!q||(p.name||'').toLowerCase().includes(q)||(p.sku||'').toLowerCase().includes(q));}).slice(0,8).map(function(p){return{id:p.id,name:p.name,code:p.sku||'',unit:p.unit||'UN',_t:'REV'};});
+  const all=[...rms,...pks,...revs].slice(0,18);
   if(!all.length){drop.style.display='none';return;}
-  drop.innerHTML=all.map(x=>'<div class="ac-opt" onclick="_nfACPick('+i+',\''+x._t+'\',\''+x.id+'\')">'+(x._t==='MP'?'🌿 ':'📦 ')+esc(x.name)+(x.code?' <span class="sku" style="font-size:11px">'+esc(x.code)+'</span>':'')+'</div>').join('');
+  drop.innerHTML=all.map(function(x){var icon=x._t==='MP'?'🌿':x._t==='PK'?'📦':'🏷️';return'<div class="ac-opt" onclick="_nfACPick('+i+',\''+x._t+'\',\''+x.id+'\')">'+icon+' '+esc(x.name)+(x.code?' <span style="font-size:11px;opacity:.6">'+esc(x.code)+'</span>':'')+'</div>';}).join('');
   drop.style.display='block';
 }
 function _nfACClose(i){const d=el('nf-acd-'+i);if(d)d.style.display='none';}
 function _nfACPick(i,type,itemId){
   const d=gdb();
-  var item=type==='MP'?d.rawMaterials.find(x=>x.id===itemId):d.packaging.find(x=>x.id===itemId);
+  var item;
+  if(type==='MP')item=d.rawMaterials.find(function(x){return x.id===itemId;});
+  else if(type==='PK')item=d.packaging.find(function(x){return x.id===itemId;});
+  else item=d.products.find(function(x){return x.id===itemId;});
   if(!item)return;
   window._nfItems[i].type=type;window._nfItems[i].itemId=itemId;
-  window._nfItems[i].itemName=item.name;window._nfItems[i].code=item.code||'';
+  window._nfItems[i].itemName=item.name;
+  window._nfItems[i].code=item.code||item.sku||'';
   window._nfItems[i].unit=item.unit||(type==='MP'?'KG':'UN');
-  var inp=el('nf-ac-'+i);if(inp)inp.value=(item.code?item.code+' | ':'')+item.name;
+  var inp=el('nf-ac-'+i);if(inp)inp.value=(window._nfItems[i].code?window._nfItems[i].code+' | ':'')+item.name;
   var unitInp=el('nf-unit-'+i);if(unitInp)unitInp.value=window._nfItems[i].unit;
   _nfACClose(i);
 }
@@ -6689,15 +6694,15 @@ function _reqRenderItems(d){
   const list=el('req-items-list');if(!list)return;
   list.innerHTML=(window._reqItems||[]).map(function(it,i){
     var dispVal=it.itemName?((it.code?it.code+' | ':'')+it.itemName):'';
-    return'<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:10px;flex-wrap:wrap;border-bottom:1px solid rgba(255,255,255,.06);padding-bottom:10px">'+
-      '<div style="flex:2;min-width:180px;position:relative"><label class="form-label">Item (MP ou Embalagem)</label>'+
-        '<div class="ac-wrap"><input class="sinput" id="req-ac-'+i+'" value="'+esc(dispVal)+'" placeholder="🔍 Digite o produto..." autocomplete="off" oninput="_reqAC('+i+')" onfocus="_reqAC('+i+')" onblur="setTimeout(function(){_reqACClose('+i+')},220)">'+
+    return'<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:10px;border-bottom:1px solid rgba(255,255,255,.06);padding-bottom:10px">'+
+      '<div style="flex:1;min-width:200px;position:relative"><label class="form-label">Item (MP ou Embalagem)</label>'+
+        '<div class="ac-wrap" style="position:relative"><input class="sinput" id="req-ac-'+i+'" value="'+esc(dispVal)+'" placeholder="Digite o produto..." autocomplete="off" style="width:100%;box-sizing:border-box" oninput="_reqAC('+i+')" onfocus="_reqAC('+i+')" onblur="setTimeout(function(){_reqACClose('+i+')},220)">'+
         '<div class="ac-drop" id="req-acd-'+i+'" style="display:none"></div></div></div>'+
-      '<div style="min-width:65px"><label class="form-label">U.M.</label>'+
-        '<input class="sinput" id="req-unit-'+i+'" value="'+esc(it.unit||'')+'" readonly style="width:65px;box-sizing:border-box;background:var(--bg-card2);opacity:.8"></div>'+
-      '<div style="min-width:90px"><label class="form-label">Qtd</label>'+
-        '<input type="number" min="0" step="0.001" class="sinput" style="width:90px;box-sizing:border-box" value="'+(it.qty||'')+'" onchange="_reqItems['+i+'].qty=parseFloat(this.value)||0"></div>'+
-      '<button class="btn btn-ghost btn-sm" style="color:var(--danger);margin-bottom:2px" onclick="_reqItems.splice('+i+',1);_reqRenderItems(gdb())">🗑️</button>'+
+      '<div style="width:70px;flex-shrink:0"><label class="form-label">U.M.</label>'+
+        '<input id="req-unit-'+i+'" value="'+esc(it.unit||'')+'" readonly style="width:70px;box-sizing:border-box;height:38px;padding:0 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card2);color:var(--muted);font-size:13px"></div>'+
+      '<div style="width:90px;flex-shrink:0"><label class="form-label">Quantidade</label>'+
+        '<input type="number" min="0" step="0.001" value="'+(it.qty||'')+'" style="width:90px;box-sizing:border-box;height:38px;padding:0 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input,var(--bg-card));color:var(--text);font-size:13px" onchange="_reqItems['+i+'].qty=parseFloat(this.value)||0"></div>'+
+      '<button class="btn btn-ghost btn-sm" style="color:var(--danger);height:38px;align-self:flex-end" onclick="_reqItems.splice('+i+',1);_reqRenderItems(gdb())">🗑️</button>'+
     '</div>';
   }).join('');
 }
