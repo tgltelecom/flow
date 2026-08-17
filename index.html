@@ -824,6 +824,8 @@ const _RM_TABLE='tgl_rawmaterials';
 const _PACK_TABLE='tgl_packaging';
 const _SUPP_TABLE='tgl_suppliers';
 const _USERS_TABLE='tgl_users';
+const _REQ_TABLE='tgl_requisicoes';
+const _COMPRAS_TABLE='tgl_compras';
 let _lastSavedProdStr={};
 let _lastSavedCliStr={};
 let _lastSavedRMStr={};
@@ -976,6 +978,23 @@ async function _loadEntityTable(table,lastSavedRef){
   return rows.map(row=>row.data);
 }
 
+// Salva um único item (requisição ou compra) na tabela dedicada — append-only
+async function _saveItemToTable(table,item){
+  const r=await _sf('/rest/v1/'+table,{
+    method:'POST',
+    headers:{Prefer:'resolution=merge-duplicates'},
+    body:JSON.stringify({id:item.id,data:item})
+  });
+  if(!r.ok)throw new Error('[TGL] '+table+' upsert HTTP '+r.status);
+}
+// Carrega todos os registros de uma tabela append-only (req/compras)
+async function _loadSimpleTable(table){
+  const r=await _sf('/rest/v1/'+table+'?select=id,data');
+  if(!r.ok)return null;
+  const rows=await r.json();
+  return rows.map(row=>row.data).filter(Boolean);
+}
+
 async function _saveEntityTable(table,items,lastSavedRef){
   const currentIds=new Set((items||[]).map(x=>x.id));
   const changed=(items||[]).filter(x=>JSON.stringify(x)!==lastSavedRef[x.id]);
@@ -1006,7 +1025,7 @@ async function _saveEntityTable(table,items,lastSavedRef){
 async function loadDB(){
   try{
     // Carrega blob principal + todas as tabelas dedicadas em paralelo
-    const [blobRes,opsLoaded,stockLoaded,movsLoaded,prodsLoaded,clisLoaded,rmsLoaded,packsLoaded,suppsLoaded,usersLoaded]=await Promise.all([
+    const [blobRes,opsLoaded,stockLoaded,movsLoaded,prodsLoaded,clisLoaded,rmsLoaded,packsLoaded,suppsLoaded,usersLoaded,reqsLoaded,comprasLoaded]=await Promise.all([
       _sf('/rest/v1/app_data?key=eq.tgl_v3&select=data'),
       _loadOps().catch(e=>{console.warn('[TGL] ops load:',e);return null;}),
       _loadStock().catch(e=>{console.warn('[TGL] stock load:',e);return null;}),
@@ -1016,7 +1035,9 @@ async function loadDB(){
       _loadEntityTable(_RM_TABLE,_lastSavedRMStr).catch(e=>{console.warn('[TGL] rawMaterials load:',e);return null;}),
       _loadEntityTable(_PACK_TABLE,_lastSavedPackStr).catch(e=>{console.warn('[TGL] packaging load:',e);return null;}),
       _loadEntityTable(_SUPP_TABLE,_lastSavedSuppStr).catch(e=>{console.warn('[TGL] suppliers load:',e);return null;}),
-      _loadEntityTable(_USERS_TABLE,_lastSavedUsersStr).catch(e=>{console.warn('[TGL] users load:',e);return null;})
+      _loadEntityTable(_USERS_TABLE,_lastSavedUsersStr).catch(e=>{console.warn('[TGL] users load:',e);return null;}),
+      _loadSimpleTable(_REQ_TABLE).catch(e=>{console.warn('[TGL] requisicoes load:',e);return null;}),
+      _loadSimpleTable(_COMPRAS_TABLE).catch(e=>{console.warn('[TGL] compras load:',e);return null;})
     ]);
     if(!blobRes.ok)throw new Error('HTTP '+blobRes.status);
     const rows=await blobRes.json();
@@ -1094,6 +1115,29 @@ async function loadDB(){
     }else{
       if((_db.users||[]).length>0){console.log('[TGL] Migrando/recuperando '+_db.users.length+' usuários…');_saveEntityTable(_USERS_TABLE,_db.users,_lastSavedUsersStr).catch(e=>console.warn('[TGL] users migrate warn:',e));}
       else{_db.users=_db.users||[];}
+    }
+    // Requisições de Material
+    if(reqsLoaded!==null&&reqsLoaded.length>0){
+      _db.requisicoes=reqsLoaded;
+    }else{
+      // Tabela vazia ou não existe ainda: migra do blob (não-bloqueante)
+      const blobReqs=_db.requisicoes||[];
+      if(blobReqs.length>0){
+        console.log('[TGL] Migrando '+blobReqs.length+' requisições para tabela…');
+        Promise.all(blobReqs.map(r=>_saveItemToTable(_REQ_TABLE,r))).catch(e=>console.warn('[TGL] reqs migrate warn:',e));
+      }
+      _db.requisicoes=blobReqs;
+    }
+    // Entradas de NF (Compras)
+    if(comprasLoaded!==null&&comprasLoaded.length>0){
+      _db.compras=comprasLoaded;
+    }else{
+      const blobCompras=_db.compras||[];
+      if(blobCompras.length>0){
+        console.log('[TGL] Migrando '+blobCompras.length+' entradas NF para tabela…');
+        Promise.all(blobCompras.map(c=>_saveItemToTable(_COMPRAS_TABLE,c))).catch(e=>console.warn('[TGL] compras migrate warn:',e));
+      }
+      _db.compras=blobCompras;
     }
     _loadAuditLog(); // não bloqueia
     setSyncBadge(true);
@@ -5080,12 +5124,14 @@ function closeGSearch(){
   async function _syncFromServer(){
     try{
       // Busca blob principal, OPs, estoque e movimentos em paralelo
-      const [blobRes,opsRes,stockRes,movsRes,prodsRes]=await Promise.all([
+      const [blobRes,opsRes,stockRes,movsRes,prodsRes,reqsRes,comprasRes]=await Promise.all([
         _sf('/rest/v1/app_data?key=eq.tgl_v3&select=data'),
         _sf('/rest/v1/'+_OPS_TABLE+'?select=id,data'),
         _sf('/rest/v1/'+_STOCK_TABLE+'?select=id,data'),
         _sf('/rest/v1/'+_MOV_TABLE+'?select=id,data,category'),
-        _sf('/rest/v1/'+_PROD_TABLE+'?select=id,data')
+        _sf('/rest/v1/'+_PROD_TABLE+'?select=id,data'),
+        _sf('/rest/v1/'+_REQ_TABLE+'?select=id,data'),
+        _sf('/rest/v1/'+_COMPRAS_TABLE+'?select=id,data')
       ]);
       if(!blobRes.ok)return;
       const rows=await blobRes.json();
@@ -5221,15 +5267,21 @@ function closeGSearch(){
       // Entidades que vivem em tabelas dedicadas — preservar o _db atual (fonte de verdade),
       // não sobrescrever com os arrays vazios que o blob carrega por design.
       // ── Sync Produtos ────────────────────────────────────────────────────────────
-      // Busca produtos da tabela dedicada para refletir alterações de kit/produto
-      // sem precisar de F5. Se o servidor tiver dados, usa-os; senão preserva local.
       const serverProdsRows=prodsRes.ok?(await prodsRes.json()):[];
       const mergedProds=serverProdsRows.length?serverProdsRows.map(r=>r.data).filter(Boolean):(_db.products||[]);
+
+      // ── Sync Requisições e Compras (tabelas dedicadas) ────────────────────────
+      const serverReqRows=reqsRes.ok?(await reqsRes.json()):[];
+      const mergedReqs=serverReqRows.length?serverReqRows.map(r=>r.data).filter(Boolean):(_db.requisicoes||[]);
+
+      const serverComprasRows=comprasRes.ok?(await comprasRes.json()):[];
+      const mergedCompras=serverComprasRows.length?serverComprasRows.map(r=>r.data).filter(Boolean):(_db.compras||[]);
 
       const nd={...idb(),...rows[0].data,
         products:mergedProds,clients:_db.clients||[],rawMaterials:_db.rawMaterials||[],
         packaging:_db.packaging||[],suppliers:_db.suppliers||[],users:_db.users||[],
-        ops:mergedOps,stock:mergedStock,rawMaterialStock:mergedRmStock,packagingStock:mergedPkStock,packagingStockAt:mergedPkStockAt,rawMaterialMovements:mergedRmMovs,packagingMovements:mergedPkMovs};
+        ops:mergedOps,stock:mergedStock,rawMaterialStock:mergedRmStock,packagingStock:mergedPkStock,packagingStockAt:mergedPkStockAt,rawMaterialMovements:mergedRmMovs,packagingMovements:mergedPkMovs,
+        requisicoes:mergedReqs,compras:mergedCompras};
       const _gracePassed=(Date.now()-_lastSaveAt)>15000;
       _checkForceLogout(nd);
       if(!S)return;
@@ -6673,6 +6725,7 @@ async function _nfConfirmar(){
     }
     if(!d.compras)d.compras=[];
     d.compras.push(entrada);
+    await _saveItemToTable(_COMPRAS_TABLE,entrada);
     await sdb(d);Mclose();
     toast('Entrada de NF registrada com sucesso!','ok');
     renderSupCompras();
@@ -6828,6 +6881,7 @@ async function _reqConfirmar(){
       }
     }
     d.requisicoes.push(req);
+    await _saveItemToTable(_REQ_TABLE,req);
     await sdb(d);
     Mclose();
     toast(num+' registrada com sucesso!','ok');
