@@ -4195,6 +4195,16 @@ function rProducao(el2){
   goProducao((_curPst&&el('pst-'+_curPst))?_curPst:defaultSec);
 }
 
+function _onProdSearch(sec){
+  goProducao(sec);
+  const inp=el('prod-srch-'+sec);
+  if(inp){inp.focus();const l=inp.value.length;inp.setSelectionRange(l,l);}
+}
+function _onSepSearch(val){
+  _sepSearch=val;renderSeparacao();
+  const inp=el('sep-srch');
+  if(inp){inp.focus();const l=inp.value.length;inp.setSelectionRange(l,l);}
+}
 function goProducao(sec){
   document.querySelectorAll('.stab[id^="pst-"]').forEach(b=>b.classList.toggle('on',b.id==='pst-'+sec));
   if(sec==='separacao'){renderSeparacao();return;}
@@ -4228,7 +4238,7 @@ function goProducao(sec){
   const _sort=_prodSort[sec]||{col:'deliveryDate',dir:1};
   ec.innerHTML='<div class="card"><div class="card-header">'+
     '<div><div class="card-title">'+labels[sec]+'</div><div class="card-sub">'+opsMeta.length+' ordem(ns)</div></div>'+
-    '<input type="text" class="sinput" placeholder="🔍 Buscar pedido ou cliente..." value="'+esc(q)+'" oninput="_prodSearch[\''+sec+'\']=this.value;goProducao(\''+sec+'\')" style="width:220px;padding:6px 10px;font-size:13px">'+
+    '<input id="prod-srch-'+sec+'" type="text" class="sinput" placeholder="🔍 Buscar pedido ou cliente..." value="'+esc(q)+'" oninput="_prodSearch[\''+sec+'\']=this.value;_onProdSearch(\''+sec+'\')" style="width:220px;padding:6px 10px;font-size:13px">'+
     '</div>'+
     (opsMeta.length?'<div class="tw"><table><thead><tr>'+
       '<th style="width:42px"></th>'+
@@ -4382,7 +4392,7 @@ function renderSeparacao(){
     '<div class="card-header">'+
     '<div><div class="card-title">Produção / Separação de Estoque</div>'+
     '<div class="card-sub">Confira e libere os itens de estoque de cada OP</div></div>'+
-    '<input type="text" class="sinput" placeholder="🔍 Buscar pedido ou cliente..." value="'+esc(q)+'" oninput="_sepSearch=this.value;renderSeparacao()" style="width:220px;padding:6px 10px;font-size:13px">'+
+    '<input id="sep-srch" type="text" class="sinput" placeholder="🔍 Buscar pedido ou cliente..." value="'+esc(q)+'" oninput="_onSepSearch(this.value)" style="width:220px;padding:6px 10px;font-size:13px">'+
     '</div>'+
     (ops.length
       ?'<div class="tw"><table><thead><tr><th style="width:42px"></th><th>Pedido</th><th>Cliente</th><th>Prazo</th><th>Itens Estoque</th><th>Progresso</th></tr></thead><tbody id="sep-tb"></tbody></table></div>'
