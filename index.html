@@ -5279,10 +5279,21 @@ function closeGSearch(){
 
       // ── Sync Requisições e Compras (tabelas dedicadas) ────────────────────────
       const serverReqRows=reqsRes.ok?(await reqsRes.json()):[];
-      const mergedReqs=serverReqRows.length?serverReqRows.map(r=>r.data).filter(Boolean):(_db.requisicoes||[]);
+      const _srvReqs=serverReqRows.map(r=>r.data).filter(Boolean);
+      const _locReqs=_db.requisicoes||[];
+      const _srvReqIds=new Set(_srvReqs.map(r=>r.id));
+      const _localOnlyReqs=_locReqs.filter(r=>!_srvReqIds.has(r.id));
+      const mergedReqs=[..._srvReqs,..._localOnlyReqs];
+      // Retry: re-salva reqs locais que não chegaram ao servidor
+      if(_localOnlyReqs.length){_localOnlyReqs.forEach(r=>_saveItemToTable(_REQ_TABLE,r).catch(()=>{}));}
 
       const serverComprasRows=comprasRes.ok?(await comprasRes.json()):[];
-      const mergedCompras=serverComprasRows.length?serverComprasRows.map(r=>r.data).filter(Boolean):(_db.compras||[]);
+      const _srvCompras=serverComprasRows.map(r=>r.data).filter(Boolean);
+      const _locCompras=_db.compras||[];
+      const _srvComprasIds=new Set(_srvCompras.map(c=>c.id));
+      const _localOnlyCompras=_locCompras.filter(c=>!_srvComprasIds.has(c.id));
+      const mergedCompras=[..._srvCompras,..._localOnlyCompras];
+      if(_localOnlyCompras.length){_localOnlyCompras.forEach(c=>_saveItemToTable(_COMPRAS_TABLE,c).catch(()=>{}));}
 
       const nd={...idb(),...rows[0].data,
         products:mergedProds,clients:_db.clients||[],rawMaterials:_db.rawMaterials||[],
@@ -6915,10 +6926,13 @@ async function _reqConfirmar(){
     const _logSuffix=num+(opNum?' / OP #'+opNum:'')+' — Resp: '+responsavel+(solicitante?' — Sol: '+solicitante:'');
     for(const it of items){
       if(it.type==='MP'){
-        const sid=it.supplierId||'avulso';
         const stk=d.rawMaterialStock[it.itemId];
-        const curQty=stk?Object.values(stk.bySupplier||{}).reduce((a,b)=>a+b,0):0;
+        const byS=stk?stk.bySupplier||{}:{};
+        const curQty=Object.values(byS).reduce((a,b)=>a+b,0);
         if(curQty<it.qty){toast('Estoque insuficiente para '+it.itemName+' (disponível: '+fnum(curQty)+' '+it.unit+')','warn');if(btn){btn.disabled=false;btn.textContent='✅ Confirmar Requisição';}return;}
+        // Deduz do fornecedor com mais estoque (evita entradas fantasmas em 'avulso')
+        const _supE=Object.entries(byS).filter(([,q])=>q>0).sort((a,b)=>b[1]-a[1]);
+        const sid=_supE.length?_supE[0][0]:'avulso';
         await _rpcRMAdjust(it.itemId,sid,-it.qty);
         logAction(d,'Saída MP',it.itemName+' -'+fnum(it.qty)+' '+(it.unit||'KG')+' — '+_logSuffix);
       }else{
@@ -6934,6 +6948,9 @@ async function _reqConfirmar(){
     Mclose();
     toast(num+' registrada com sucesso!','ok');
     renderSupReqs();
+    // Atualiza exibição de estoque se a aba estiver visível
+    if(el('sup-mp-rows'))_renderSupMPRows(gdb());
+    if(el('sup-emb-rows'))_renderSupEmbRows(gdb());
   }catch(e){
     toast('Erro ao salvar: '+e.message,'err');
     if(btn){btn.disabled=false;btn.textContent='✅ Confirmar Requisição';}
