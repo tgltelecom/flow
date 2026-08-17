@@ -6923,7 +6923,8 @@ async function _reqConfirmar(){
   try{
     const d=gdb();
     if(!d.requisicoes)d.requisicoes=[];
-    const num='REQ-'+String(d.requisicoes.length+1).padStart(3,'0');
+    const _nums=(d.requisicoes||[]).map(r=>{const _m=(r.num||'').match(/REQ-(\d+)/);return _m?parseInt(_m[1]):0;});
+    const num='REQ-'+String(Math.max(171,..._nums)+1).padStart(3,'0');
     const req={id:uid(),num,createdAt:Date.now(),createdBy:responsavel,responsavel,solicitante,opId,opNum,status:'confirmada',items};
     // Validar estoque ANTES de qualquer débito
     for(const it of items){
