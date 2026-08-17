@@ -6374,23 +6374,24 @@ async function openHistoricoMP(mid){
         const dtStr=dt.toLocaleDateString('pt-BR')+' '+dt.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
         const det=row.details||'';
         let tipo='',deltaStr='—',cls='color:var(--muted)';
+        const _ptbr=s=>parseFloat((s||'').replace(/\./g,'').replace(',','.'));
         if(row.action==='Entrada MP'){
           const m2=det.match(/\+([0-9.,]+)/);
-          const qty=m2?parseFloat(m2[1].replace(',','.')):null;
+          const qty=m2?_ptbr(m2[1]):null;
           if(qty!=null)totalEnt+=qty;
           tipo='Entrada';cls='color:var(--green)';
-          deltaStr=qty!=null?'<span style="'+cls+';font-weight:700">+'+fnum(qty)+' '+_munit+'</span>':'—';
+          deltaStr=qty!=null?'<span style="'+cls+';font-weight:700">+'+fqty(qty,_munit)+' '+_munit+'</span>':'—';
         }else if(row.action==='Saída MP'){
           const m2=det.match(/-([0-9.,]+)/);
-          const qty=m2?parseFloat(m2[1].replace(',','.')):null;
+          const qty=m2?_ptbr(m2[1]):null;
           if(qty!=null)totalSai+=qty;
           tipo='Saída';cls='color:var(--danger)';
-          deltaStr=qty!=null?'<span style="'+cls+';font-weight:700">-'+fnum(qty)+' '+_munit+'</span>':'—';
+          deltaStr=qty!=null?'<span style="'+cls+';font-weight:700">-'+fqty(qty,_munit)+' '+_munit+'</span>':'—';
         }else if(row.action==='Inventário MP'){
           const m2=det.match(/([+-][0-9.,]+)/);
-          const qty=m2?parseFloat(m2[1].replace(',','.')):null;
+          const qty=m2?_ptbr(m2[1]):null;
           tipo='Inventário';cls='color:var(--accent)';
-          deltaStr=qty!=null?'<span style="'+cls+'">'+(qty>=0?'+':'')+fnum(qty)+' '+_munit+'</span>':'—';
+          deltaStr=qty!=null?'<span style="'+cls+'">'+(qty>=0?'+':'')+fqty(qty,_munit)+' '+_munit+'</span>':'—';
         }
         const reqMatch=det.match(/REQ-\d+/);const nfMatch=det.match(/NF\s+(\S+)/);
         const refStr=reqMatch?reqMatch[0]:(nfMatch?'NF '+nfMatch[1]:'');
@@ -6411,10 +6412,10 @@ async function openHistoricoMP(mid){
       html='<div style="display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap">'+
         '<div style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.25);border-radius:8px;padding:10px 16px;min-width:100px">'+
         '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Total entradas</div>'+
-        '<div style="font-size:22px;font-weight:700;color:var(--green)">+'+fnum(totalEnt)+' '+_munit+'</div></div>'+
+        '<div style="font-size:22px;font-weight:700;color:var(--green)">+'+fqty(totalEnt,_munit)+' '+_munit+'</div></div>'+
         '<div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.25);border-radius:8px;padding:10px 16px;min-width:100px">'+
         '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Total saídas</div>'+
-        '<div style="font-size:22px;font-weight:700;color:var(--danger)">-'+fnum(totalSai)+' '+_munit+'</div></div>'+
+        '<div style="font-size:22px;font-weight:700;color:var(--danger)">-'+fqty(totalSai,_munit)+' '+_munit+'</div></div>'+
         '<div style="background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.25);border-radius:8px;padding:10px 16px;min-width:100px">'+
         '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Saldo atual</div>'+
         '<div style="font-size:22px;font-weight:700;color:var(--accent)">'+fnum(stockNow)+' '+_munit+'</div></div>'+
@@ -6463,23 +6464,24 @@ async function openHistoricoEmb(pid){
         const dtStr=dt.toLocaleDateString('pt-BR')+' '+dt.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
         const det=row.details||'';
         let tipo='',deltaStr='—',cls='color:var(--muted)';
+        const _ptbrE=s=>parseFloat((s||'').replace(/\./g,'').replace(',','.'));
         if(row.action==='Entrada Embalagem'){
           const m2=det.match(/\+([0-9.,]+)/);
-          const qty=m2?parseFloat(m2[1].replace(',','.')):null;
+          const qty=m2?_ptbrE(m2[1]):null;
           if(qty!=null)totalEnt+=qty;
           tipo='Entrada';cls='color:var(--green)';
-          deltaStr=qty!=null?'<span style="'+cls+';font-weight:700">+'+fnum(qty)+' '+_eunit+'</span>':'—';
+          deltaStr=qty!=null?'<span style="'+cls+';font-weight:700">+'+fqty(qty,_eunit)+' '+_eunit+'</span>':'—';
         }else if(row.action==='Saída Embalagem'){
           const m2=det.match(/-([0-9.,]+)/);
-          const qty=m2?parseFloat(m2[1].replace(',','.')):null;
+          const qty=m2?_ptbrE(m2[1]):null;
           if(qty!=null)totalSai+=qty;
           tipo='Saída';cls='color:var(--danger)';
-          deltaStr=qty!=null?'<span style="'+cls+';font-weight:700">-'+fnum(qty)+' '+_eunit+'</span>':'—';
+          deltaStr=qty!=null?'<span style="'+cls+';font-weight:700">-'+fqty(qty,_eunit)+' '+_eunit+'</span>':'—';
         }else if(row.action==='Inventário Embalagem'){
           const m2=det.match(/([+-][0-9.,]+)/);
-          const qty=m2?parseFloat(m2[1].replace(',','.')):null;
+          const qty=m2?_ptbrE(m2[1]):null;
           tipo='Inventário';cls='color:var(--accent)';
-          deltaStr=qty!=null?'<span style="'+cls+'">'+(qty>=0?'+':'')+fnum(qty)+' '+_eunit+'</span>':'—';
+          deltaStr=qty!=null?'<span style="'+cls+'">'+(qty>=0?'+':'')+fqty(qty,_eunit)+' '+_eunit+'</span>':'—';
         }
         const reqMatchE=det.match(/REQ-\d+/);const nfMatchE=det.match(/NF\s+(\S+)/);
         const refStrE=reqMatchE?reqMatchE[0]:(nfMatchE?'NF '+nfMatchE[1]:'');
@@ -6498,10 +6500,10 @@ async function openHistoricoEmb(pid){
       html='<div style="display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap">'+
         '<div style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.25);border-radius:8px;padding:10px 16px;min-width:100px">'+
         '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Total entradas</div>'+
-        '<div style="font-size:22px;font-weight:700;color:var(--green)">+'+fnum(totalEnt)+' '+_eunit+'</div></div>'+
+        '<div style="font-size:22px;font-weight:700;color:var(--green)">+'+fqty(totalEnt,_eunit)+' '+_eunit+'</div></div>'+
         '<div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.25);border-radius:8px;padding:10px 16px;min-width:100px">'+
         '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Total saídas</div>'+
-        '<div style="font-size:22px;font-weight:700;color:var(--danger)">-'+fnum(totalSai)+' '+_eunit+'</div></div>'+
+        '<div style="font-size:22px;font-weight:700;color:var(--danger)">-'+fqty(totalSai,_eunit)+' '+_eunit+'</div></div>'+
         '<div style="background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.25);border-radius:8px;padding:10px 16px;min-width:100px">'+
         '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Saldo atual</div>'+
         '<div style="font-size:22px;font-weight:700;color:var(--accent)">'+fnum(stockNow)+' '+_eunit+'</div></div>'+
@@ -6923,27 +6925,38 @@ async function _reqConfirmar(){
     if(!d.requisicoes)d.requisicoes=[];
     const num='REQ-'+String(d.requisicoes.length+1).padStart(3,'0');
     const req={id:uid(),num,createdAt:Date.now(),createdBy:responsavel,responsavel,solicitante,opId,opNum,status:'confirmada',items};
-    const _logSuffix=num+(opNum?' / OP #'+opNum:'')+' — Resp: '+responsavel+(solicitante?' — Sol: '+solicitante:'');
+    // Validar estoque ANTES de qualquer débito
     for(const it of items){
       if(it.type==='MP'){
         const stk=d.rawMaterialStock[it.itemId];
         const byS=stk?stk.bySupplier||{}:{};
         const curQty=Object.values(byS).reduce((a,b)=>a+b,0);
         if(curQty<it.qty){toast('Estoque insuficiente para '+it.itemName+' (disponível: '+fnum(curQty)+' '+it.unit+')','warn');if(btn){btn.disabled=false;btn.textContent='✅ Confirmar Requisição';}return;}
+      }else{
+        const curQty=d.packagingStock[it.itemId]||0;
+        if(curQty<it.qty){toast('Estoque insuficiente para '+it.itemName+' (disponível: '+fnum(curQty)+' '+it.unit+')','warn');if(btn){btn.disabled=false;btn.textContent='✅ Confirmar Requisição';}return;}
+      }
+    }
+    // Salva a req PRIMEIRO (evita débito de estoque sem requisição em caso de falha)
+    d.requisicoes.push(req);
+    await _saveItemToTable(_REQ_TABLE,req);
+    await sdb(d);
+    // Agora debita o estoque via RPC
+    const _logSuffix=num+(opNum?' / OP #'+opNum:'')+' — Resp: '+responsavel+(solicitante?' — Sol: '+solicitante:'');
+    for(const it of items){
+      if(it.type==='MP'){
+        const stk=d.rawMaterialStock[it.itemId];
+        const byS=stk?stk.bySupplier||{}:{};
         // Deduz do fornecedor com mais estoque (evita entradas fantasmas em 'avulso')
         const _supE=Object.entries(byS).filter(([,q])=>q>0).sort((a,b)=>b[1]-a[1]);
         const sid=_supE.length?_supE[0][0]:'avulso';
         await _rpcRMAdjust(it.itemId,sid,-it.qty);
         logAction(d,'Saída MP',it.itemName+' -'+fnum(it.qty)+' '+(it.unit||'KG')+' — '+_logSuffix);
       }else{
-        const curQty=d.packagingStock[it.itemId]||0;
-        if(curQty<it.qty){toast('Estoque insuficiente para '+it.itemName+' (disponível: '+fnum(curQty)+' '+it.unit+')','warn');if(btn){btn.disabled=false;btn.textContent='✅ Confirmar Requisição';}return;}
         await _rpcPKAdjust(it.itemId,-it.qty);
         logAction(d,'Saída Emb',it.itemName+' -'+fnum(it.qty)+' '+(it.unit||'UN')+' — '+_logSuffix);
       }
     }
-    d.requisicoes.push(req);
-    await _saveItemToTable(_REQ_TABLE,req);
     await sdb(d);
     Mclose();
     toast(num+' registrada com sucesso!','ok');
