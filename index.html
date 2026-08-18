@@ -5604,12 +5604,9 @@ function _packHasMovements(d,pid){return(d.packagingMovements||[]).some(m=>m.ite
 async function _rpcPKAdjust(pid,delta){
   const at=Date.now();
   const r=await _sf('/rest/v1/rpc/adjust_pk_stock',{method:'POST',body:JSON.stringify({p_id:'PK:'+pid,p_delta:delta,p_at:at})});
-  if(!r.ok)throw new Error((await r.text())||'Erro ao salvar estoque de embalagem');
-  const nd=await r.json();
-  const d=gdb();d.packagingStock[pid]=nd.qty;
-  if(!d.packagingStockAt)d.packagingStockAt={};
-  d.packagingStockAt[pid]=nd.at;_pkServerAt[pid]=nd.at;
-  _lastSavedStockStr['PK:'+pid]=JSON.stringify({qty:nd.qty});
+  if(!r.ok){const _t=await r.text();console.error('[TGL] adjust_pk_stock falhou',r.status,_t);throw new Error(_t.startsWith('<')?'Erro HTTP '+r.status+' na RPC de estoque embalagem':_t||'Erro ao salvar estoque de embalagem');}
+  let nd;try{nd=await r.json();}catch(_){return;} // RPC OK mas body inválido — sync vai corrigir
+  if(nd&&nd.qty!==undefined){const d=gdb();d.packagingStock[pid]=nd.qty;if(!d.packagingStockAt)d.packagingStockAt={};d.packagingStockAt[pid]=nd.at;_pkServerAt[pid]=nd.at;_lastSavedStockStr['PK:'+pid]=JSON.stringify({qty:nd.qty});}
 }
 // PK (Embalagem): set absoluto (inventário)
 async function _rpcPKSet(pid,qty){
@@ -5626,10 +5623,9 @@ async function _rpcPKSet(pid,qty){
 async function _rpcRMAdjust(mid,sid,delta){
   const at=Date.now();
   const r=await _sf('/rest/v1/rpc/adjust_rm_stock',{method:'POST',body:JSON.stringify({p_id:'RM:'+mid,p_supplier_id:sid,p_delta:delta,p_at:at})});
-  if(!r.ok)throw new Error((await r.text())||'Erro ao salvar estoque de matéria-prima');
-  const nd=await r.json();
-  const d=gdb();d.rawMaterialStock[mid]=nd;
-  _lastSavedStockStr['RM:'+mid]=JSON.stringify(nd);
+  if(!r.ok){const _t=await r.text();console.error('[TGL] adjust_rm_stock falhou',r.status,_t);throw new Error(_t.startsWith('<')?'Erro HTTP '+r.status+' na RPC de estoque MP':_t||'Erro ao salvar estoque de matéria-prima');}
+  let nd;try{nd=await r.json();}catch(_){return;} // RPC OK mas body inválido — sync vai corrigir
+  if(nd&&nd.total!==undefined){const d=gdb();d.rawMaterialStock[mid]=nd;_lastSavedStockStr['RM:'+mid]=JSON.stringify(nd);}
 }
 // RM (Matéria-Prima): set absoluto por fornecedor (inventário)
 async function _rpcRMSet(mid,sid,qty){
@@ -6840,20 +6836,18 @@ async function deleteReq(id){
 
 function openNovaReq(){
   const d=gdb();
-  const ops=(d.ops||[]).filter(o=>o.status!=='finalizado').slice(-50);
-  const opOpts=ops.map(o=>'<option value="'+esc(o.id)+'|'+esc(o.opNum)+'">OP #'+esc(o.opNum)+' — '+esc(o.clientName||'')+'</option>').join('');
-  const nextNum='REQ-'+String((d.requisicoes||[]).length+1).padStart(3,'0');
-  window._reqItems=[];
+  const _nums=(d.requisicoes||[]).map(r=>{const m=(r.num||'').match(/REQ-(\d+)/);return m?parseInt(m[1]):0;});
+  const nextNum='REQ-'+String(Math.max(172,..._nums)+1).padStart(3,'0');
+  window._reqItems=[];window._reqOpId='';window._reqOpNum='';
   Mopen('📋 Nova Requisição — '+nextNum,
     '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">'+
       '<div style="flex:1;min-width:160px"><label class="form-label">Responsável (sistema)</label>'+
         '<div style="padding:8px 10px;background:var(--bg-card2);border:1px solid var(--border);border-radius:8px;font-size:13px;color:var(--muted)">'+esc(S?S.name:'—')+'</div></div>'+
       '<div style="flex:1;min-width:160px"><label class="form-label">Quem Solicitou</label>'+
         '<input id="req-sol" class="sinput" style="width:100%;box-sizing:border-box" placeholder="Nome de quem pediu..." value=""></div>'+
-      '<div style="flex:1;min-width:180px"><label class="form-label">Vinculada a OP (opcional)</label>'+
-        '<select id="req-op" class="sinput" style="width:100%;box-sizing:border-box">'+
-          '<option value="">— Nenhuma —</option>'+opOpts+
-        '</select></div>'+
+      '<div style="flex:1;min-width:190px"><label class="form-label">Vinculada a OP (opcional)</label>'+
+        '<div style="position:relative"><input id="req-op-ac" class="sinput" style="width:100%;box-sizing:border-box" placeholder="Nº OP ou cliente..." autocomplete="off" oninput="_reqOpAC()" onfocus="_reqOpAC()" onblur="setTimeout(function(){_reqOpACClose()},220)">'+
+        '<div id="req-op-drop" class="ac-drop" style="display:none"></div></div></div>'+
     '</div>'+
     '<div style="margin-bottom:10px;font-weight:600;font-size:14px">Itens solicitados</div>'+
     '<div id="req-items-list"></div>'+
@@ -6866,7 +6860,7 @@ function openNovaReq(){
 
 function _reqAddItem(){
   window._reqItems=window._reqItems||[];
-  window._reqItems.push({type:'',itemId:'',itemName:'',unit:'',qty:0});
+  window._reqItems.push({type:'',itemId:'',itemName:'',unit:'',qty:0,supplierId:''});
   _reqRenderItems(gdb());
 }
 
@@ -6874,17 +6868,52 @@ function _reqRenderItems(d){
   const list=el('req-items-list');if(!list)return;
   list.innerHTML=(window._reqItems||[]).map(function(it,i){
     var dispVal=it.itemName?((it.code?it.code+' | ':'')+it.itemName):'';
-    return'<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:10px;border-bottom:1px solid rgba(255,255,255,.06);padding-bottom:10px">'+
+    // Dropdown de fornecedor — apenas para MP
+    var supHtml='';
+    if(it.type==='MP'&&it.itemId){
+      var stk=d.rawMaterialStock[it.itemId];
+      var byS=stk&&stk.bySupplier?stk.bySupplier:{};
+      var allSups=d.suppliers||[];
+      var entries=Object.entries(byS).sort(function(a,b){return b[1]-a[1];});
+      var opts='<option value="">— Fornecedor —</option>';
+      if(!entries.length){opts+='<option value="avulso">Avulso (0)</option>';}
+      else{entries.forEach(function(kv){
+        var sid=kv[0],qty=kv[1];
+        var sup=allSups.find(function(s){return s.id===sid;});
+        var nm=sid==='avulso'?'Avulso':((sup?sup.name:'?').slice(0,10));
+        opts+='<option value="'+esc(sid)+'"'+(it.supplierId===sid?' selected':'')+'>'+esc(nm+' ('+fnum(qty)+')')+'</option>';
+      });}
+      supHtml='<div style="min-width:170px;flex:1"><label class="form-label">Fornecedor</label>'+
+        '<select style="width:100%;box-sizing:border-box;height:38px;padding:0 6px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input,var(--bg-card));color:var(--text);font-size:12px" onchange="_reqItems['+i+'].supplierId=this.value">'+opts+'</select></div>';
+    }
+    return'<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:10px;border-bottom:1px solid rgba(255,255,255,.06);padding-bottom:10px;flex-wrap:wrap">'+
       '<div style="flex:1;min-width:200px;position:relative"><label class="form-label">Item (MP ou Embalagem)</label>'+
         '<div class="ac-wrap" style="position:relative"><input class="sinput" id="req-ac-'+i+'" value="'+esc(dispVal)+'" placeholder="Digite o produto..." autocomplete="off" style="width:100%;box-sizing:border-box" oninput="_reqAC('+i+')" onfocus="_reqAC('+i+')" onblur="setTimeout(function(){_reqACClose('+i+')},220)">'+
         '<div class="ac-drop" id="req-acd-'+i+'" style="display:none"></div></div></div>'+
-      '<div style="width:70px;flex-shrink:0"><label class="form-label">U.M.</label>'+
-        '<input id="req-unit-'+i+'" value="'+esc(it.unit||'')+'" readonly style="width:70px;box-sizing:border-box;height:38px;padding:0 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card2);color:var(--muted);font-size:13px"></div>'+
-      '<div style="width:90px;flex-shrink:0"><label class="form-label">Quantidade</label>'+
-        '<input type="number" min="0" step="0.001" value="'+(it.qty||'')+'" style="width:90px;box-sizing:border-box;height:38px;padding:0 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input,var(--bg-card));color:var(--text);font-size:13px" onchange="_reqItems['+i+'].qty=parseFloat(this.value)||0"></div>'+
+      '<div style="width:55px;flex-shrink:0"><label class="form-label">U.M.</label>'+
+        '<input id="req-unit-'+i+'" value="'+esc(it.unit||'')+'" readonly style="width:55px;box-sizing:border-box;height:38px;padding:0 6px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card2);color:var(--muted);font-size:13px"></div>'+
+      supHtml+
+      '<div style="width:85px;flex-shrink:0"><label class="form-label">Quantidade</label>'+
+        '<input type="text" inputmode="decimal" value="'+(it.qty||'')+'" placeholder="0" style="width:85px;box-sizing:border-box;height:38px;padding:0 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input,var(--bg-card));color:var(--text);font-size:13px" oninput="_reqItems['+i+'].qty=parseFloat(this.value.replace(\',\',\'.\'))||0" onchange="_reqItems['+i+'].qty=parseFloat(this.value.replace(\',\',\'.\'))||0"></div>'+
       '<button class="btn btn-ghost btn-sm" style="color:var(--danger);height:38px;align-self:flex-end" onclick="_reqItems.splice('+i+',1);_reqRenderItems(gdb())">🗑️</button>'+
     '</div>';
   }).join('');
+}
+// OP autocomplete
+function _reqOpAC(){
+  const inp=el('req-op-ac'),drop=el('req-op-drop');if(!inp||!drop)return;
+  const q=inp.value.toLowerCase().trim();
+  const d=gdb();
+  const ops=(d.ops||[]).filter(o=>o.status!=='finalizado'&&(!q||(o.opNum||'').toLowerCase().includes(q)||(o.clientName||'').toLowerCase().includes(q))).slice(0,10);
+  if(!ops.length){drop.innerHTML='<div class="ac-opt" style="color:var(--muted);cursor:default">Nenhuma OP encontrada</div>';drop.style.display=q?'block':'none';return;}
+  drop.innerHTML=ops.map(o=>'<div class="ac-opt" onclick="_reqOpACPick(\''+esc(o.id)+'\',\''+esc(o.opNum||'')+'\')">OP #'+esc(o.opNum||'')+(o.clientName?' — '+esc(o.clientName.slice(0,25)):'')+'</div>').join('');
+  drop.style.display='block';
+}
+function _reqOpACClose(){const d=el('req-op-drop');if(d)d.style.display='none';}
+function _reqOpACPick(opId,opNum){
+  window._reqOpId=opId;window._reqOpNum=opNum;
+  const inp=el('req-op-ac');if(inp)inp.value='OP #'+opNum;
+  _reqOpACClose();
 }
 function _reqAC(i){
   const inp=el('req-ac-'+i),drop=el('req-acd-'+i);if(!inp||!drop)return;
@@ -6905,16 +6934,19 @@ function _reqACPick(i,type,itemId){
   window._reqItems[i].type=type;window._reqItems[i].itemId=itemId;
   window._reqItems[i].itemName=item.name;window._reqItems[i].code=item.code||'';
   window._reqItems[i].unit=item.unit||(type==='MP'?'KG':'UN');
-  var inp=el('req-ac-'+i);if(inp)inp.value=(item.code?item.code+' | ':'')+item.name;
-  var unitInp=el('req-unit-'+i);if(unitInp)unitInp.value=window._reqItems[i].unit;
+  // Auto-seleciona fornecedor com mais estoque
+  if(type==='MP'){
+    var stk=d.rawMaterialStock[itemId];
+    var byS=stk&&stk.bySupplier?stk.bySupplier:{};
+    var top=Object.entries(byS).sort(function(a,b){return b[1]-a[1];})[0];
+    window._reqItems[i].supplierId=top?top[0]:'avulso';
+  }else{window._reqItems[i].supplierId='';}
   _reqACClose(i);
+  _reqRenderItems(d);
 }
 
 async function _reqConfirmar(){
-  const opEl=el('req-op');
-  const opVal=opEl?opEl.value:'';
-  let opId='',opNum='';
-  if(opVal){const parts=opVal.split('|');opId=parts[0]||'';opNum=parts[1]||'';}
+  const opId=window._reqOpId||'';const opNum=window._reqOpNum||'';
   const responsavel=S?S.name:'Sistema';
   const solicitante=(el('req-sol')?el('req-sol').value.trim():'');
   const items=(window._reqItems||[]).filter(it=>it.itemId&&it.qty>0);
@@ -6946,11 +6978,7 @@ async function _reqConfirmar(){
     const _logSuffix=num+(opNum?' / OP #'+opNum:'')+' — Resp: '+responsavel+(solicitante?' — Sol: '+solicitante:'');
     for(const it of items){
       if(it.type==='MP'){
-        const stk=d.rawMaterialStock[it.itemId];
-        const byS=stk?stk.bySupplier||{}:{};
-        // Deduz do fornecedor com mais estoque (evita entradas fantasmas em 'avulso')
-        const _supE=Object.entries(byS).filter(([,q])=>q>0).sort((a,b)=>b[1]-a[1]);
-        const sid=_supE.length?_supE[0][0]:'avulso';
+        const sid=it.supplierId||'avulso';
         await _rpcRMAdjust(it.itemId,sid,-it.qty);
         logAction(d,'Saída MP',it.itemName+' -'+fnum(it.qty)+' '+(it.unit||'KG')+' — '+_logSuffix);
       }else{
@@ -6966,7 +6994,7 @@ async function _reqConfirmar(){
     if(el('sup-mp-rows'))_renderSupMPRows(gdb());
     if(el('sup-emb-rows'))_renderSupEmbRows(gdb());
   }catch(e){
-    toast('Erro ao salvar: '+e.message,'err');
+    toast('Erro ao salvar: '+esc(String(e.message||e)),'err');
     if(btn){btn.disabled=false;btn.textContent='✅ Confirmar Requisição';}
   }
 }
