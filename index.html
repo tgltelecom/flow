@@ -980,12 +980,12 @@ async function _loadEntityTable(table,lastSavedRef){
 
 // Salva um único item (requisição ou compra) na tabela dedicada — append-only
 async function _saveItemToTable(table,item){
-  const r=await _sf('/rest/v1/'+table,{
+  const r=await _sf('/rest/v1/'+table+'?on_conflict=id',{
     method:'POST',
     headers:{Prefer:'resolution=merge-duplicates'},
     body:JSON.stringify({id:item.id,data:item})
   });
-  if(!r.ok)throw new Error('[TGL] '+table+' upsert HTTP '+r.status);
+  if(!r.ok){const _t=await r.text();console.error('[TGL]',table,'upsert falhou',r.status,_t);throw new Error('[TGL] '+table+' upsert HTTP '+r.status);}
 }
 // Carrega todos os registros de uma tabela append-only (req/compras)
 async function _loadSimpleTable(table){
@@ -6892,16 +6892,18 @@ function _reqRenderItems(d){
       supHtml='<div style="min-width:170px;flex:1"><label class="form-label">Fornecedor</label>'+
         '<select disabled style="width:100%;box-sizing:border-box;height:38px;padding:0 6px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card2);color:var(--muted);font-size:12px"><option>N/A (Embalagem)</option></select></div>';
     }
-    return'<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:10px;border-bottom:1px solid rgba(255,255,255,.06);padding-bottom:10px;flex-wrap:wrap">'+
-      '<div style="flex:1;min-width:200px;position:relative"><label class="form-label">Item (MP ou Embalagem)</label>'+
-        '<div class="ac-wrap" style="position:relative"><input class="sinput" id="req-ac-'+i+'" value="'+esc(dispVal)+'" placeholder="Digite o produto..." autocomplete="off" style="width:100%;box-sizing:border-box" oninput="_reqAC('+i+')" onfocus="_reqAC('+i+')" onblur="setTimeout(function(){_reqACClose('+i+')},220)">'+
-        '<div class="ac-drop" id="req-acd-'+i+'" style="display:none"></div></div></div>'+
-      '<div style="width:55px;flex-shrink:0"><label class="form-label">U.M.</label>'+
-        '<input id="req-unit-'+i+'" value="'+esc(it.unit||'')+'" readonly style="width:55px;box-sizing:border-box;height:38px;padding:0 6px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card2);color:var(--muted);font-size:13px"></div>'+
-      supHtml+
-      '<div style="width:85px;flex-shrink:0"><label class="form-label">Quantidade</label>'+
-        '<input type="text" inputmode="decimal" value="'+(it.qty||'')+'" placeholder="0" style="width:85px;box-sizing:border-box;height:38px;padding:0 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input,var(--bg-card));color:var(--text);font-size:13px" oninput="_reqItems['+i+'].qty=parseFloat(this.value.replace(\',\',\'.\'))||0" onchange="_reqItems['+i+'].qty=parseFloat(this.value.replace(\',\',\'.\'))||0"></div>'+
-      '<button class="btn btn-ghost btn-sm" style="color:var(--danger);height:38px;align-self:flex-end" onclick="_reqItems.splice('+i+',1);_reqRenderItems(gdb())">🗑️</button>'+
+    return'<div style="margin-bottom:10px;border-bottom:1px solid rgba(255,255,255,.06);padding-bottom:10px">'+
+      '<div style="position:relative;margin-bottom:6px"><label class="form-label">Item (MP ou Embalagem)</label>'+
+        '<input class="sinput" id="req-ac-'+i+'" value="'+esc(dispVal)+'" placeholder="Digite o produto..." autocomplete="off" style="width:100%;box-sizing:border-box" oninput="_reqAC('+i+')" onfocus="_reqAC('+i+')" onblur="setTimeout(function(){_reqACClose('+i+')},220)">'+
+        '<div class="ac-drop" id="req-acd-'+i+'" style="display:none"></div></div>'+
+      '<div style="display:flex;gap:8px;align-items:flex-end">'+
+        '<div style="width:58px;flex-shrink:0"><label class="form-label">U.M.</label>'+
+          '<input id="req-unit-'+i+'" value="'+esc(it.unit||'')+'" readonly style="width:58px;box-sizing:border-box;height:38px;padding:0 6px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card2);color:var(--muted);font-size:13px"></div>'+
+        supHtml+
+        '<div style="width:90px;flex-shrink:0"><label class="form-label">Quantidade</label>'+
+          '<input type="text" inputmode="decimal" value="'+(it.qty||'')+'" placeholder="0" style="width:90px;box-sizing:border-box;height:38px;padding:0 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input,var(--bg-card));color:var(--text);font-size:13px" oninput="_reqItems['+i+'].qty=parseFloat(this.value.replace(\',\',\'.\'))||0" onchange="_reqItems['+i+'].qty=parseFloat(this.value.replace(\',\',\'.\'))||0"></div>'+
+        '<button class="btn btn-ghost btn-sm" style="color:var(--danger);height:38px;align-self:flex-end;flex-shrink:0" onclick="_reqItems.splice('+i+',1);_reqRenderItems(gdb())">🗑️</button>'+
+      '</div>'+
     '</div>';
   }).join('');
 }
