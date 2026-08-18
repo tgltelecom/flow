@@ -6610,7 +6610,8 @@ function renderSupCompras(){
       '<td>'+c2.items.length+' item(s)</td>'+
       '<td style="font-size:12px">'+esc(c2.createdBy||'—')+'</td>'+
       '<td style="font-size:12px">'+fdatetime(c2.createdAt)+'</td>'+
-      '<td><button class="btn btn-ghost btn-sm" onclick="openViewNF(\''+c2.id+'\')">👁️ Ver</button></td>'+
+      '<td style="display:flex;gap:4px"><button class="btn btn-ghost btn-sm" onclick="openViewNF(\''+c2.id+'\')">👁️ Ver</button>'+
+        '<button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="deleteNFConfirm(\''+c2.id+'\')">🗑️</button></td>'+
     '</tr>').join('')+
     '</tbody></table></div>'+
     '<div style="padding:8px 16px;font-size:12px;color:var(--muted)">'+lista.length+' entrada(s) registrada(s)</div>':
@@ -6637,6 +6638,52 @@ function openViewNF(id){
     '<div class="tw"><table><thead><tr><th>Tipo</th><th>Item</th><th style="text-align:center">Quantidade</th></tr></thead><tbody>'+rows+'</tbody></table></div>',
     '<button class="btn btn-ghost" onclick="Mclose()">Fechar</button>'
   );
+}
+
+function deleteNFConfirm(id){
+  const d=gdb();
+  const e=(d.compras||[]).find(x=>x.id===id);
+  if(!e){toast('Entrada não encontrada','err');return;}
+  const resumo=(e.items||[]).map(it=>'<li>'+esc(it.itemName||'—')+' — <span style="color:var(--danger)">-'+fnum(it.qty)+' '+(it.unit||'UN')+'</span></li>').join('');
+  Mopen('🗑️ Excluir Entrada de NF',
+    '<div style="margin-bottom:14px;padding:12px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:10px;color:var(--danger);font-weight:600">⚠️ Esta ação irá estornar o estoque dos itens abaixo e não pode ser desfeita.</div>'+
+    '<div style="margin-bottom:8px"><strong>NF '+esc(e.nfe||'—')+'</strong>'+(e.supplierName?' — '+esc(e.supplierName):'')+' — '+fdatetime(e.createdAt)+'</div>'+
+    '<ul style="margin:0 0 0 16px;padding:0;font-size:13px;line-height:2">'+resumo+'</ul>',
+    '<button class="btn btn-ghost" onclick="Mclose()">Cancelar</button>'+
+    '<button class="btn btn-danger" onclick="deleteNF(\''+id+'\')">🗑️ Confirmar Exclusão</button>'
+  );
+}
+async function deleteNF(id){
+  const d=gdb();
+  const idx=(d.compras||[]).findIndex(x=>x.id===id);
+  if(idx===-1){toast('Entrada não encontrada','err');return;}
+  const e=d.compras[idx];
+  const btn=document.querySelector('#mfooter .btn-danger');if(btn){btn.disabled=true;btn.textContent='Excluindo...';}
+  try{
+    // Estornar estoque via RPC
+    for(const it of (e.items||[])){
+      if(it.type==='MP'){
+        const sid=e.supplierId||'avulso';
+        await _rpcRMAdjust(it.itemId,sid,-it.qty);
+        logAction(d,'Estorno MP',it.itemName+' -'+fnum(it.qty)+' '+(it.unit||'KG')+(e.nfe?' — Estorno NF '+e.nfe:''));
+      }else if(it.type==='PK'){
+        await _rpcPKAdjust(it.itemId,-it.qty);
+        logAction(d,'Estorno Emb',it.itemName+' -'+fnum(it.qty)+' '+(it.unit||'UN')+(e.nfe?' — Estorno NF '+e.nfe:''));
+      }
+    }
+    // Remove do estado local e do Supabase
+    d.compras.splice(idx,1);
+    _sf('/rest/v1/'+_COMPRAS_TABLE+'?id=eq.'+encodeURIComponent(id),{method:'DELETE'}).catch(err=>console.warn('[TGL] delete NF:',err));
+    await sdb(d);
+    Mclose();
+    toast('NF excluída e estoque estornado!','ok');
+    renderSupCompras();
+    if(el('sup-mp-rows'))_renderSupMPRows(gdb());
+    if(el('sup-emb-rows'))_renderSupEmbRows(gdb());
+  }catch(e2){
+    toast('Erro ao excluir: '+esc(String(e2.message||e2)),'err');
+    if(btn){btn.disabled=false;btn.textContent='🗑️ Confirmar Exclusão';}
+  }
 }
 
 function openNovaEntradaNF(){
@@ -6747,7 +6794,7 @@ async function _nfConfirmar(){
     }
     if(!d.compras)d.compras=[];
     d.compras.push(entrada);
-    await _saveItemToTable(_COMPRAS_TABLE,entrada);
+    _saveItemToTable(_COMPRAS_TABLE,entrada).catch(e=>console.warn('[TGL] compras save:',e));
     await sdb(d);Mclose();
     toast('Entrada de NF registrada com sucesso!','ok');
     renderSupCompras();
@@ -6790,11 +6837,16 @@ function openViewReq(id){
   const d=gdb();
   const r=(d.requisicoes||[]).find(x=>x.id===id);
   if(!r){toast('Requisição não encontrada','err');return;}
-  const rows=(r.items||[]).map(it=>'<tr>'+
-    '<td>'+(it.type==='MP'?'🌿 MP':'📦 Emb')+'</td>'+
-    '<td>'+(it.code?'<span class="sku">'+esc(it.code)+'</span> ':'')+esc(it.itemName||'—')+'</td>'+
-    '<td style="text-align:center;font-weight:700">'+fnum(it.qty)+' '+esc(it.unit||'UN')+'</td>'+
-  '</tr>').join('');
+  const rows=(r.items||[]).map(it=>{
+    const sup=it.supplierId&&it.supplierId!=='avulso'?d.suppliers.find(s=>s.id===it.supplierId):null;
+    const supName=sup?sup.name:(it.supplierId==='avulso'?'Avulso':'—');
+    return'<tr>'+
+      '<td>'+(it.type==='MP'?'🌿 MP':'📦 Emb')+'</td>'+
+      '<td>'+(it.code?'<span class="sku">'+esc(it.code)+'</span> ':'')+esc(it.itemName||'—')+'</td>'+
+      '<td style="font-size:12px;color:var(--muted)">'+(it.type==='MP'?esc(supName):'—')+'</td>'+
+      '<td style="text-align:center;font-weight:700">'+fnum(it.qty)+' '+esc(it.unit||'UN')+'</td>'+
+    '</tr>';
+  }).join('');
   Mopen('📋 '+esc(r.num||'Requisição'),
     '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px;padding:12px;background:var(--bg-card2);border-radius:10px">'+
       (r.opNum?'<div><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Vinculada a</div><strong>OP #'+esc(r.opNum)+'</strong></div>':'')+
@@ -6803,7 +6855,7 @@ function openViewReq(id){
       '<div><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Data/Hora</div><strong>'+fdatetime(r.createdAt)+'</strong></div>'+
       '<div><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Status</div><span class="bs bs-liberado">'+esc(r.status||'confirmada')+'</span></div>'+
     '</div>'+
-    '<div class="tw"><table><thead><tr><th>Tipo</th><th>Item</th><th style="text-align:center">Quantidade</th></tr></thead><tbody>'+rows+'</tbody></table></div>',
+    '<div class="tw"><table><thead><tr><th>Tipo</th><th>Item</th><th>Fornecedor</th><th style="text-align:center">Quantidade</th></tr></thead><tbody>'+rows+'</tbody></table></div>',
     '<button class="btn btn-ghost" onclick="Mclose()">Fechar</button>'
   );
 }
@@ -6978,9 +7030,9 @@ async function _reqConfirmar(){
         if(curQty<it.qty){toast('Estoque insuficiente para '+it.itemName+' (disponível: '+fnum(curQty)+' '+it.unit+')','warn');if(btn){btn.disabled=false;btn.textContent='✅ Confirmar Requisição';}return;}
       }
     }
-    // Salva a req PRIMEIRO (evita débito de estoque sem requisição em caso de falha)
+    // Salva a req (non-fatal — débito de estoque é mais crítico)
     d.requisicoes.push(req);
-    await _saveItemToTable(_REQ_TABLE,req);
+    _saveItemToTable(_REQ_TABLE,req).catch(e=>console.warn('[TGL] req save:',e));
     await sdb(d);
     // Agora debita o estoque via RPC
     const _logSuffix=num+(opNum?' / OP #'+opNum:'')+' — Resp: '+responsavel+(solicitante?' — Sol: '+solicitante:'');
