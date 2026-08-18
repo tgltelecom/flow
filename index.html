@@ -6868,9 +6868,12 @@ function _reqRenderItems(d){
   const list=el('req-items-list');if(!list)return;
   list.innerHTML=(window._reqItems||[]).map(function(it,i){
     var dispVal=it.itemName?((it.code?it.code+' | ':'')+it.itemName):'';
-    // Dropdown de fornecedor — apenas para MP
-    var supHtml='';
-    if(it.type==='MP'&&it.itemId){
+    // Dropdown de fornecedor — sempre visível; populado após seleção de MP
+    var supHtml;
+    if(!it.itemId){
+      supHtml='<div style="min-width:170px;flex:1"><label class="form-label">Fornecedor</label>'+
+        '<select disabled style="width:100%;box-sizing:border-box;height:38px;padding:0 6px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card2);color:var(--muted);font-size:12px"><option>— Selecione o item —</option></select></div>';
+    } else if(it.type==='MP'){
       var stk=d.rawMaterialStock[it.itemId];
       var byS=stk&&stk.bySupplier?stk.bySupplier:{};
       var allSups=d.suppliers||[];
@@ -6885,6 +6888,9 @@ function _reqRenderItems(d){
       });}
       supHtml='<div style="min-width:170px;flex:1"><label class="form-label">Fornecedor</label>'+
         '<select style="width:100%;box-sizing:border-box;height:38px;padding:0 6px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input,var(--bg-card));color:var(--text);font-size:12px" onchange="_reqItems['+i+'].supplierId=this.value">'+opts+'</select></div>';
+    } else {
+      supHtml='<div style="min-width:170px;flex:1"><label class="form-label">Fornecedor</label>'+
+        '<select disabled style="width:100%;box-sizing:border-box;height:38px;padding:0 6px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card2);color:var(--muted);font-size:12px"><option>N/A (Embalagem)</option></select></div>';
     }
     return'<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:10px;border-bottom:1px solid rgba(255,255,255,.06);padding-bottom:10px;flex-wrap:wrap">'+
       '<div style="flex:1;min-width:200px;position:relative"><label class="form-label">Item (MP ou Embalagem)</label>'+
