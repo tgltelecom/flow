@@ -492,10 +492,7 @@ tbody tr:last-child td{border-bottom:none}
 
     <div id="lf-login">
       <div id="lerr" class="lerr"></div>
-      <div id="pwd-reset-alert" class="alert alert-warn" style="display:flex;align-items:flex-start;gap:8px">
-        <span style="flex:1">⚠️ <strong>Senhas redefinidas.</strong> Use <strong>123456</strong> para entrar e redefina sua senha nas configurações de usuário.</span>
-        <button onclick="document.getElementById('pwd-reset-alert').style.display='none'" style="background:none;border:none;color:inherit;cursor:pointer;font-size:16px;padding:0;line-height:1">✕</button>
-      </div>
+
       <div class="fg"><label>E-mail</label><input type="email" id="l-email" placeholder="seu@email.com" autocomplete="email"></div>
       <div class="fg"><label>Senha</label><input type="password" id="l-pw" placeholder="••••••••" autocomplete="current-password"></div>
       <button class="btn btn-green btn-full" onclick="doLogin()" style="margin-top:4px">Entrar</button>
@@ -826,6 +823,7 @@ const _SUPP_TABLE='tgl_suppliers';
 const _USERS_TABLE='tgl_users';
 const _REQ_TABLE='tgl_requisicoes';
 const _COMPRAS_TABLE='tgl_compras';
+const _PRF_STOCK_TABLE='tgl_preformados_stock';
 let _lastSavedProdStr={};
 let _lastSavedCliStr={};
 let _lastSavedRMStr={};
@@ -1025,7 +1023,7 @@ async function _saveEntityTable(table,items,lastSavedRef){
 async function loadDB(){
   try{
     // Carrega blob principal + todas as tabelas dedicadas em paralelo
-    const [blobRes,opsLoaded,stockLoaded,movsLoaded,prodsLoaded,clisLoaded,rmsLoaded,packsLoaded,suppsLoaded,usersLoaded,reqsLoaded,comprasLoaded]=await Promise.all([
+    const [blobRes,opsLoaded,stockLoaded,movsLoaded,prodsLoaded,clisLoaded,rmsLoaded,packsLoaded,suppsLoaded,usersLoaded,reqsLoaded,comprasLoaded,prfStockLoaded]=await Promise.all([
       _sf('/rest/v1/app_data?key=eq.tgl_v3&select=data'),
       _loadOps().catch(e=>{console.warn('[TGL] ops load:',e);return null;}),
       _loadStock().catch(e=>{console.warn('[TGL] stock load:',e);return null;}),
@@ -1037,7 +1035,8 @@ async function loadDB(){
       _loadEntityTable(_SUPP_TABLE,_lastSavedSuppStr).catch(e=>{console.warn('[TGL] suppliers load:',e);return null;}),
       _loadEntityTable(_USERS_TABLE,_lastSavedUsersStr).catch(e=>{console.warn('[TGL] users load:',e);return null;}),
       _loadSimpleTable(_REQ_TABLE).catch(e=>{console.warn('[TGL] requisicoes load:',e);return null;}),
-      _loadSimpleTable(_COMPRAS_TABLE).catch(e=>{console.warn('[TGL] compras load:',e);return null;})
+      _loadSimpleTable(_COMPRAS_TABLE).catch(e=>{console.warn('[TGL] compras load:',e);return null;}),
+      _loadSimpleTable(_PRF_STOCK_TABLE).catch(e=>{console.warn('[TGL] preformados load:',e);return null;})
     ]);
     if(!blobRes.ok)throw new Error('HTTP '+blobRes.status);
     const rows=await blobRes.json();
@@ -1139,6 +1138,11 @@ async function loadDB(){
       }
       _db.compras=blobCompras;
     }
+    // Estoque de Preformados
+    if(prfStockLoaded!==null&&prfStockLoaded.length>0){
+      _db.preformadosStock={};
+      prfStockLoaded.forEach(r=>{_db.preformadosStock[r.id]=r;});
+    }else{_db.preformadosStock=_db.preformadosStock||{};}
     _loadAuditLog(); // não bloqueia
     setSyncBadge(true);
   }catch(e){
@@ -3841,7 +3845,7 @@ function rSuprimentos(cnt){
   const _curSst=_activeSst?_activeSst.replace('sst-',''):null;
   const tabs=isCmp
     ?'<button class="stab on" id="sst-mp" onclick="sstab(\'mp\')">🌿 Matéria Prima</button><button class="stab" id="sst-emb" onclick="sstab(\'emb\')">📦 Embalagens</button><button class="stab" id="sst-est" onclick="sstab(\'est\')">🏷️ Estoque Produtos</button>'
-    :'<button class="stab on" id="sst-est" onclick="sstab(\'est\')">🏷️ Estoque</button><button class="stab" id="sst-mp" onclick="sstab(\'mp\')">🌿 Matéria Prima</button><button class="stab" id="sst-emb" onclick="sstab(\'emb\')">📦 Embalagens</button><button class="stab" id="sst-req" onclick="sstab(\'req\')">📋 Requisições</button><button class="stab" id="sst-nf" onclick="sstab(\'nf\')">🧾 Entradas NF</button>';
+    :'<button class="stab on" id="sst-est" onclick="sstab(\'est\')">🏷️ Estoque</button><button class="stab" id="sst-mp" onclick="sstab(\'mp\')">🌿 Matéria Prima</button><button class="stab" id="sst-emb" onclick="sstab(\'emb\')">📦 Embalagens</button><button class="stab" id="sst-prf" onclick="sstab(\'prf\')">🧵 Preformados</button><button class="stab" id="sst-req" onclick="sstab(\'req\')">📋 Requisições</button><button class="stab" id="sst-nf" onclick="sstab(\'nf\')">🧾 Entradas NF</button>';
   cnt.innerHTML='<div class="ptitle">📦 Suprimentos</div><div class="stabs">'+tabs+'</div><div id="sup-tabs-c"></div>';
   _supFilter='';_supSort={col:'name',dir:1};
   const _defSst=isCmp?'mp':'est';
@@ -3855,6 +3859,7 @@ function sstab(t){
   if(t==='est'){_supFilter='';renderEstoque();}
   else if(t==='mp')renderSupMP();
   else if(t==='emb')renderSupEmb();
+  else if(t==='prf')renderSupPreformados();
   else if(t==='req')renderSupReqs();
   else if(t==='nf')renderSupCompras();
 }
@@ -6684,6 +6689,163 @@ async function deleteNF(id){
     toast('Erro ao excluir: '+esc(String(e2.message||e2)),'err');
     if(btn){btn.disabled=false;btn.textContent='🗑️ Confirmar Exclusão';}
   }
+}
+
+// ═══════════════════════════════════════════════════════════
+// PREFORMADOS — Parse + CRUD + Render
+// ═══════════════════════════════════════════════════════════
+function _parsePreformado(name){
+  const n=(name||'').toUpperCase().trim();
+  if(!n.includes(' PRF '))return null;
+  const tipoM=n.match(/^(ALCA|LACO|DERIVACAO)\s+PRF\s+/);
+  if(!tipoM)return null;
+  const tipo=tipoM[1];
+  let material,materialLabel,afterMat;
+  if(n.indexOf('AC CCE')>0){material='AC CCE';materialLabel='Aço';afterMat=n.slice(n.indexOf('AC CCE')+'AC CCE'.length);}
+  else if(n.indexOf('AL CABO OPTICO')>0){material='AL CABO OPTICO';materialLabel='Alumínio';afterMat=n.slice(n.indexOf('AL CABO OPTICO')+'AL CABO OPTICO'.length);}
+  else return null;
+  const rng=afterMat.match(/\s+([\d,\.]+)\s*-\s*([\d,\.]+)\s*MM/i);
+  if(!rng)return null;
+  const rangeMin=parseFloat(rng[1].replace(',','.'));
+  const rangeMax=parseFloat(rng[2].replace(',','.'));
+  const afterRng=afterMat.slice(afterMat.toUpperCase().indexOf(rng[0].toUpperCase())+rng[0].length).trim();
+  const vM=afterRng.match(/^(.*?)\s+(\d+)V\s+(\d+)\s*MM\s*$/i);
+  if(!vM)return null;
+  return{tipo,material,materialLabel,rangeMin,rangeMax,cor:vM[1].trim(),varetas:parseInt(vM[2]),comprimento:parseInt(vM[3])};
+}
+
+async function _savePRFStock(stock){
+  const r=await _sf('/rest/v1/'+_PRF_STOCK_TABLE+'?on_conflict=id',{
+    method:'POST',headers:{Prefer:'resolution=merge-duplicates'},
+    body:JSON.stringify({id:stock.productId,data:stock})
+  });
+  if(!r.ok){const t=await r.text();throw new Error(t||'Erro ao salvar preformado');}
+}
+
+function renderSupPreformados(){
+  const c=el('sup-c');if(!c)return;
+  const d=gdb();
+  const prfs=(d.products||[]).filter(p=>_parsePreformado(p.name)).map(p=>({p,attr:_parsePreformado(p.name),stk:d.preformadosStock&&d.preformadosStock[p.id]?d.preformadosStock[p.id]:null}));
+  c.innerHTML='<div class="card"><div class="card-header"><div class="card-title">🧵 Estoque de Preformados</div></div>'+
+    (prfs.length?
+      '<div class="tw"><table><thead><tr>'+
+        '<th>Produto</th><th>Tipo</th><th>Material</th><th>Range (mm)</th><th>Cor</th><th>Varetas</th><th>Comp. (mm)</th>'+
+        '<th style="text-align:center">Estoque</th><th>Local / Prateleira</th><th></th>'+
+      '</tr></thead><tbody>'+
+      prfs.map(({p,attr,stk})=>{
+        const qty=stk?stk.qty:0;
+        const local=stk?(stk.local||'—'):'—';
+        const prateleira=stk?(stk.prateleira||'—'):'—';
+        return'<tr>'+
+          '<td><strong>'+esc(p.name)+'</strong></td>'+
+          '<td><span class="bs" style="font-size:11px">'+esc(attr.tipo)+'</span></td>'+
+          '<td style="font-size:12px">'+esc(attr.materialLabel)+'</td>'+
+          '<td style="font-size:12px">'+fnum(attr.rangeMin)+' – '+fnum(attr.rangeMax)+'</td>'+
+          '<td style="font-size:12px">'+esc(attr.cor)+'</td>'+
+          '<td style="text-align:center">'+attr.varetas+'V</td>'+
+          '<td style="text-align:center">'+attr.comprimento+'</td>'+
+          '<td style="text-align:center;font-weight:700;color:'+(qty<=0?'var(--danger)':'var(--green)')+'">'+fnum(qty)+' UN</td>'+
+          '<td style="font-size:12px">'+esc(local)+(prateleira!=='—'?' / '+esc(prateleira):'')+'</td>'+
+          '<td style="white-space:nowrap">'+
+            '<button class="btn btn-ghost btn-sm" onclick="openEntradaPRF(\''+p.id+'\')">➕</button> '+
+            '<button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="openSaidaPRF(\''+p.id+'\')">➖</button> '+
+            '<button class="btn btn-ghost btn-sm" onclick="openHistoricoPRF(\''+p.id+'\')">🕐</button>'+
+          '</td>'+
+        '</tr>';
+      }).join('')+
+      '</tbody></table></div>'+
+      '<div style="padding:8px 16px;font-size:12px;color:var(--muted)">'+prfs.length+' preformado(s) cadastrado(s)</div>'
+    :'<div class="empty"><div class="ei">🧵</div><p>Nenhum produto com "PRF" no nome cadastrado</p></div>')+
+  '</div>';
+}
+
+function openEntradaPRF(pid){
+  const d=gdb();const p=d.products.find(x=>x.id===pid);if(!p)return;
+  const stk=d.preformadosStock&&d.preformadosStock[pid];
+  const local=stk?stk.local||'':'';const prat=stk?stk.prateleira||'':'';
+  Mopen('➕ Entrada de Preformado',
+    '<div style="margin-bottom:10px;padding:10px;background:var(--bg-card2);border-radius:8px;font-size:13px"><strong>'+esc(p.name)+'</strong><br><span style="color:var(--muted)">Estoque atual: '+(stk?fnum(stk.qty):0)+' UN</span></div>'+
+    '<div style="display:flex;gap:10px;flex-wrap:wrap">'+
+      '<div style="flex:1;min-width:120px"><label class="form-label">Quantidade (UN) *</label>'+
+        '<input type="number" id="prf-qty" min="0.001" step="0.001" class="sinput" style="width:100%;box-sizing:border-box" placeholder="0"></div>'+
+      '<div style="flex:1;min-width:140px"><label class="form-label">Local</label>'+
+        '<input id="prf-local" class="sinput" style="width:100%;box-sizing:border-box" placeholder="Ex: Galpão A" value="'+esc(local)+'"></div>'+
+      '<div style="flex:1;min-width:120px"><label class="form-label">Prateleira</label>'+
+        '<input id="prf-prat" class="sinput" style="width:100%;box-sizing:border-box" placeholder="Ex: 3.2.1" value="'+esc(prat)+'"></div>'+
+    '</div>'+
+    '<div style="margin-top:10px"><label class="form-label">Referência (OP, NF, etc.)</label>'+
+      '<input id="prf-ref" class="sinput" style="width:100%;box-sizing:border-box" placeholder="Opcional"></div>',
+    '<button class="btn btn-ghost" onclick="Mclose()">Cancelar</button>'+
+    '<button class="btn btn-green" onclick="submitEntradaPRF(\''+pid+'\')">✅ Confirmar</button>'
+  );
+}
+
+async function submitEntradaPRF(pid){
+  const d=gdb();const p=d.products.find(x=>x.id===pid);if(!p)return;
+  const qty=parseFloat((el('prf-qty').value||'0').replace(',','.'))||0;
+  if(qty<=0){toast('Informe a quantidade','warn');return;}
+  const local=(el('prf-local').value||'').trim();
+  const prat=(el('prf-prat').value||'').trim();
+  const ref=(el('prf-ref').value||'').trim();
+  const stk=d.preformadosStock&&d.preformadosStock[pid]?d.preformadosStock[pid]:{productId:pid,name:p.name,qty:0,local:'',prateleira:''};
+  const novo={...stk,productId:pid,name:p.name,qty:(stk.qty||0)+qty,local:local||stk.local||'',prateleira:prat||stk.prateleira||'',updatedAt:Date.now(),updatedBy:S?S.name:''};
+  try{
+    await _savePRFStock(novo);
+    if(!d.preformadosStock)d.preformadosStock={};
+    d.preformadosStock[pid]=novo;
+    logAction(d,'Entrada PRF',esc(p.name)+' +'+fnum(qty)+' UN'+(ref?' — '+ref:''));
+    Mclose();toast('Entrada registrada!','ok');renderSupPreformados();
+  }catch(e){toast('Erro: '+esc(e.message),'err');}
+}
+
+function openSaidaPRF(pid){
+  const d=gdb();const p=d.products.find(x=>x.id===pid);if(!p)return;
+  const stk=d.preformadosStock&&d.preformadosStock[pid];
+  const qty=stk?stk.qty:0;
+  if(qty<=0){toast('Sem estoque disponível','warn');return;}
+  Mopen('➖ Saída de Preformado',
+    '<div style="margin-bottom:10px;padding:10px;background:var(--bg-card2);border-radius:8px;font-size:13px"><strong>'+esc(p.name)+'</strong><br><span style="color:var(--muted)">Estoque disponível: '+fnum(qty)+' UN</span></div>'+
+    '<div style="display:flex;gap:10px">'+
+      '<div style="flex:1"><label class="form-label">Quantidade (UN) *</label>'+
+        '<input type="number" id="prf-qty" min="0.001" max="'+qty+'" step="0.001" class="sinput" style="width:100%;box-sizing:border-box" placeholder="0"></div>'+
+      '<div style="flex:1"><label class="form-label">Referência (OP, REQ, etc.)</label>'+
+        '<input id="prf-ref" class="sinput" style="width:100%;box-sizing:border-box" placeholder="Opcional"></div>'+
+    '</div>',
+    '<button class="btn btn-ghost" onclick="Mclose()">Cancelar</button>'+
+    '<button class="btn btn-danger" onclick="submitSaidaPRF(\''+pid+'\')">✅ Confirmar</button>'
+  );
+}
+
+async function submitSaidaPRF(pid){
+  const d=gdb();const p=d.products.find(x=>x.id===pid);if(!p)return;
+  const qty=parseFloat((el('prf-qty').value||'0').replace(',','.'))||0;
+  if(qty<=0){toast('Informe a quantidade','warn');return;}
+  const ref=(el('prf-ref').value||'').trim();
+  const stk=d.preformadosStock&&d.preformadosStock[pid];
+  const curQty=stk?stk.qty:0;
+  if(qty>curQty){toast('Quantidade maior que estoque disponível ('+fnum(curQty)+' UN)','warn');return;}
+  const novo={...stk,qty:curQty-qty,updatedAt:Date.now(),updatedBy:S?S.name:''};
+  try{
+    await _savePRFStock(novo);
+    d.preformadosStock[pid]=novo;
+    logAction(d,'Saída PRF',esc(p.name)+' -'+fnum(qty)+' UN'+(ref?' — '+ref:''));
+    Mclose();toast('Saída registrada!','ok');renderSupPreformados();
+  }catch(e){toast('Erro: '+esc(e.message),'err');}
+}
+
+function openHistoricoPRF(pid){
+  const d=gdb();const p=d.products.find(x=>x.id===pid);if(!p)return;
+  const entradas=_auditLog.filter(e=>(e.action==='Entrada PRF'||e.action==='Saída PRF')&&(e.details||'').startsWith(p.name));
+  const rows=entradas.length?entradas.map(e=>'<tr>'+
+    '<td style="font-size:12px">'+fdatetime(e.at)+'</td>'+
+    '<td>'+(e.action==='Entrada PRF'?'<span style="color:var(--green)">➕ Entrada</span>':'<span style="color:var(--danger)">➖ Saída</span>')+'</td>'+
+    '<td style="font-size:12px">'+esc(e.details.slice(p.name.length+1))+'</td>'+
+    '<td style="font-size:12px;color:var(--muted)">'+esc(e.uname||'—')+'</td>'+
+  '</tr>').join(''):'<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:20px">Nenhuma movimentação registrada</td></tr>';
+  Mopen('🕐 Histórico — '+esc(p.name),
+    '<div class="tw"><table><thead><tr><th>Data/Hora</th><th>Tipo</th><th>Referência</th><th>Por</th></tr></thead><tbody>'+rows+'</tbody></table></div>',
+    '<button class="btn btn-ghost" onclick="Mclose()">Fechar</button>'
+  );
 }
 
 function openNovaEntradaNF(){
