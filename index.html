@@ -824,6 +824,7 @@ const _USERS_TABLE='tgl_users';
 const _REQ_TABLE='tgl_requisicoes';
 const _COMPRAS_TABLE='tgl_compras';
 const _PRF_STOCK_TABLE='tgl_preformados_stock';
+const _LOTES_TABLE='tgl_lotes';
 let _lastSavedProdStr={};
 let _lastSavedCliStr={};
 let _lastSavedRMStr={};
@@ -1023,7 +1024,7 @@ async function _saveEntityTable(table,items,lastSavedRef){
 async function loadDB(){
   try{
     // Carrega blob principal + todas as tabelas dedicadas em paralelo
-    const [blobRes,opsLoaded,stockLoaded,movsLoaded,prodsLoaded,clisLoaded,rmsLoaded,packsLoaded,suppsLoaded,usersLoaded,reqsLoaded,comprasLoaded,prfStockLoaded]=await Promise.all([
+    const [blobRes,opsLoaded,stockLoaded,movsLoaded,prodsLoaded,clisLoaded,rmsLoaded,packsLoaded,suppsLoaded,usersLoaded,reqsLoaded,comprasLoaded,prfStockLoaded,lotesLoaded]=await Promise.all([
       _sf('/rest/v1/app_data?key=eq.tgl_v3&select=data'),
       _loadOps().catch(e=>{console.warn('[TGL] ops load:',e);return null;}),
       _loadStock().catch(e=>{console.warn('[TGL] stock load:',e);return null;}),
@@ -1036,7 +1037,8 @@ async function loadDB(){
       _loadEntityTable(_USERS_TABLE,_lastSavedUsersStr).catch(e=>{console.warn('[TGL] users load:',e);return null;}),
       _loadSimpleTable(_REQ_TABLE).catch(e=>{console.warn('[TGL] requisicoes load:',e);return null;}),
       _loadSimpleTable(_COMPRAS_TABLE).catch(e=>{console.warn('[TGL] compras load:',e);return null;}),
-      _loadSimpleTable(_PRF_STOCK_TABLE).catch(e=>{console.warn('[TGL] preformados load:',e);return null;})
+      _loadSimpleTable(_PRF_STOCK_TABLE).catch(e=>{console.warn('[TGL] preformados load:',e);return null;}),
+      _loadSimpleTable(_LOTES_TABLE).catch(e=>{console.warn('[TGL] lotes load:',e);return null;})
     ]);
     if(!blobRes.ok)throw new Error('HTTP '+blobRes.status);
     const rows=await blobRes.json();
@@ -1143,6 +1145,11 @@ async function loadDB(){
       _db.preformadosStock={};
       prfStockLoaded.forEach(r=>{_db.preformadosStock[r.id]=r;});
     }else{_db.preformadosStock=_db.preformadosStock||{};}
+    // Lotes de rastreabilidade
+    if(lotesLoaded!==null&&lotesLoaded.length>0){
+      _db.lotes={};
+      lotesLoaded.forEach(r=>{_db.lotes[r.id]=r;});
+    }else{_db.lotes=_db.lotes||{};}
     _loadAuditLog(); // não bloqueia
     setSyncBadge(true);
   }catch(e){
@@ -1360,7 +1367,7 @@ function setSyncBadge(ok){
 
 function gdb(){return _db||idb();}
 function sdb(d){_db=d;try{localStorage.setItem('tgl_bk',JSON.stringify(d));}catch{}saveDBRemote(d);}
-function idb(){return{users:[{id:'u1',name:'Administrador',email:'admin@tgltelecom.com.br',password:'admin123',role:'admin',firstAccess:false,pending:false}],clients:[],products:[],ops:[],stock:{},seq:1000,presence:{},auditLog:[],alerts:{},forceLogout:{},rawMaterials:[],packaging:[],suppliers:[],rawMaterialStock:{},packagingStock:{},rawMaterialMovements:[],packagingMovements:[],purchaseOrders:[],notifications:[],requisicoes:[],compras:[]};}
+function idb(){return{users:[{id:'u1',name:'Administrador',email:'admin@tgltelecom.com.br',password:'admin123',role:'admin',firstAccess:false,pending:false}],clients:[],products:[],ops:[],stock:{},seq:1000,presence:{},auditLog:[],alerts:{},forceLogout:{},rawMaterials:[],packaging:[],suppliers:[],rawMaterialStock:{},packagingStock:{},rawMaterialMovements:[],packagingMovements:[],purchaseOrders:[],notifications:[],requisicoes:[],compras:[],lotes:{}};}
 function uid(){return '_'+Math.random().toString(36).substr(2,9);}
 function logAction(d,action,details){
   if(!S)return;
@@ -1494,6 +1501,7 @@ function startApp(u){
   buildNav();navFirst();
   const bw=el('bell-wrap');if(bw)bw.style.display='inline-flex';
   renderBell();
+  setTimeout(_checkQualityPending,3000);
   // Show changelog modal if version changed, then check alerts
   setTimeout(()=>{_checkChangelog(u);setTimeout(()=>{_checkAlert();setTimeout(()=>{if(!el('M').classList.contains('open'))_checkStockAlerts();},800);},600);},400);
 }
@@ -1827,6 +1835,7 @@ function can(sec){
   if(roles.includes('admin'))return true;
   if(roles.includes('pcp'))return['dashboard','cadastros','pedidos','suprimentos','producao','expedicao'].includes(sec);
   if(roles.includes('comprador'))return['dashboard','cadastros','suprimentos'].includes(sec);
+  if(roles.includes('qualidade'))return['dashboard','pedidos','suprimentos','producao','expedicao'].includes(sec);
   const allowed=new Set();
   roles.forEach(r=>{
     if(['preformados','estamparia','espinar'].includes(r))allowed.add('producao');
@@ -1835,7 +1844,7 @@ function can(sec){
   return allowed.has(sec);
 }
 function isComprador(){return S&&_roles(S).some(r=>r==='comprador')&&!_roles(S).includes('admin')&&!_roles(S).includes('pcp');}
-function rlabel(r){return{admin:'👑 Administrador',pcp:'📋 PCP',preformados:'🧵 Preformados',estamparia:'🔩 Estamparia',espinar:'🔌 Espinar/Fita',expedicao:'🚚 Expedição',comprador:'🛒 Comprador',pending:'⏳ Aguardando'}[r]||r;}
+function rlabel(r){return{admin:'👑 Administrador',pcp:'📋 PCP',preformados:'🧵 Preformados',estamparia:'🔩 Estamparia',espinar:'🔌 Espinar/Fita',expedicao:'🚚 Expedição',comprador:'🛒 Comprador',qualidade:'🔬 Qualidade',pending:'⏳ Aguardando'}[r]||r;}
 function rlabelUser(u){return _roles(u).map(r=>rlabel(r)).join(' + ');}
 
 // ─── NAV ───
@@ -1864,7 +1873,7 @@ function buildNav(){
 
 function navFirst(){
   const roles=_roles(S);
-  if(roles.some(r=>r==='admin'||r==='pcp'||r==='comprador'))goTab('dashboard');
+  if(roles.some(r=>r==='admin'||r==='pcp'||r==='comprador'||r==='qualidade'))goTab('dashboard');
   else if(roles.some(r=>['preformados','estamparia','espinar'].includes(r)))goTab('producao');
   else goTab('expedicao');
 }
@@ -3845,7 +3854,7 @@ function rSuprimentos(cnt){
   const _curSst=_activeSst?_activeSst.replace('sst-',''):null;
   const tabs=isCmp
     ?'<button class="stab on" id="sst-mp" onclick="sstab(\'mp\')">🌿 Matéria Prima</button><button class="stab" id="sst-emb" onclick="sstab(\'emb\')">📦 Embalagens</button><button class="stab" id="sst-est" onclick="sstab(\'est\')">🏷️ Estoque Produtos</button>'
-    :'<button class="stab on" id="sst-est" onclick="sstab(\'est\')">🏷️ Estoque</button><button class="stab" id="sst-mp" onclick="sstab(\'mp\')">🌿 Matéria Prima</button><button class="stab" id="sst-emb" onclick="sstab(\'emb\')">📦 Embalagens</button><button class="stab" id="sst-prf" onclick="sstab(\'prf\')">🧵 Preformados</button><button class="stab" id="sst-req" onclick="sstab(\'req\')">📋 Requisições</button><button class="stab" id="sst-nf" onclick="sstab(\'nf\')">🧾 Entradas NF</button>';
+    :'<button class="stab on" id="sst-est" onclick="sstab(\'est\')">🏷️ Estoque</button><button class="stab" id="sst-mp" onclick="sstab(\'mp\')">🌿 Matéria Prima</button><button class="stab" id="sst-emb" onclick="sstab(\'emb\')">📦 Embalagens</button><button class="stab" id="sst-prf" onclick="sstab(\'prf\')">🧵 Preformados</button><button class="stab" id="sst-req" onclick="sstab(\'req\')">📋 Requisições</button><button class="stab" id="sst-nf" onclick="sstab(\'nf\')">🧾 Entradas NF</button><button class="stab" id="sst-qual" onclick="sstab(\'qual\')">🔬 Qualidade</button>';
   cnt.innerHTML='<div class="ptitle">📦 Suprimentos</div><div class="stabs">'+tabs+'</div><div id="sup-tabs-c"></div>';
   _supFilter='';_supSort={col:'name',dir:1};
   const _defSst=isCmp?'mp':'est';
@@ -3862,6 +3871,7 @@ function sstab(t){
   else if(t==='prf')renderSupPreformados();
   else if(t==='req')renderSupReqs();
   else if(t==='nf')renderSupCompras();
+  else if(t==='qual')renderSupQualidade();
 }
 let _opTipData={};
 function showOpTip(evt,pid){
@@ -5009,7 +5019,7 @@ function renderUsers(){
 function openUserForm(id){
   const d=gdb(),u=id?d.users.find(x=>x.id===id):null;
   const roleOpts=[{v:'admin',l:'👑 Administrador'},{v:'pcp',l:'📋 PCP'},{v:'preformados',l:'🧵 Preformados'},
-    {v:'estamparia',l:'🔩 Estamparia'},{v:'espinar',l:'🔌 Espinar/Fita'},{v:'expedicao',l:'🚚 Expedição'},{v:'comprador',l:'🛒 Comprador'}];
+    {v:'estamparia',l:'🔩 Estamparia'},{v:'espinar',l:'🔌 Espinar/Fita'},{v:'expedicao',l:'🚚 Expedição'},{v:'comprador',l:'🛒 Comprador'},{v:'qualidade',l:'🔬 Qualidade'}];
   const userRoles=_roles(u||{role:'preformados'});
   Mopen(u?'Editar Usuário':'Novo Usuário',
     '<div class="fg"><label>Nome *</label><input type="text" id="uf-name" value="'+esc(u?u.name:'')+'"></div>'+
@@ -5370,7 +5380,7 @@ function closeGSearch(){
   // ── FALLBACK POLLING (60s) ────────────────────────────────────────────────────
   // Safety net: fires every 60s in case the WebSocket drops or misses an event.
   // With Realtime working correctly this is rarely needed but ensures consistency.
-  setInterval(()=>{ if(S)_syncFromServer(); },60000);
+  setInterval(()=>{ if(S){_syncFromServer();setTimeout(_checkQualityPending,2000);} },60000);
   // Presence heartbeat — update lastSeen every 2 minutes.
   // IMPORTANT: always fetch fresh server data first to avoid sending stale user/role
   // data that could overwrite changes made by other users (e.g. admin changing a role).
@@ -6692,6 +6702,170 @@ async function deleteNF(id){
 }
 
 // ═══════════════════════════════════════════════════════════
+// QUALIDADE — Notificação, Popup, Aba
+// ═══════════════════════════════════════════════════════════
+let _qualityPopupTimer=null;
+let _qualityAckedCompras=[];
+try{_qualityAckedCompras=JSON.parse(localStorage.getItem('_tgl_qual_acked')||'[]');}catch{}
+
+function _notifyQualidade(compraId){
+  // Marca esta compra como pendente de inspeção
+  // Popup aparece para qualquer usuário qualidade no próximo check
+  _checkQualityPending();
+}
+
+function _checkQualityPending(){
+  if(!S)return;
+  const roles=_roles(S);
+  if(!roles.includes('qualidade')&&!roles.includes('admin'))return;
+  const d=gdb();
+  const pending=Object.values(d.lotes||{}).filter(l=>l.status==='aguardando'&&!_qualityAckedCompras.includes(l.compraId));
+  if(pending.length>0)_showQualityPopup(pending);
+}
+
+function _showQualityPopup(pending){
+  const ex=document.getElementById('quality-popup');if(ex)ex.remove();
+  const groups={};
+  pending.forEach(l=>{if(!groups[l.compraId])groups[l.compraId]={name:l.materialName,ids:[],nfe:l.nfe};groups[l.compraId].ids.push(l.id);});
+  const lines=Object.values(groups).map(g=>esc(g.name)+(g.nfe?' (NF '+esc(g.nfe)+')':'')+' — '+g.ids.length+' volume(s)').join('<br>');
+  const div=document.createElement('div');
+  div.id='quality-popup';
+  div.style='position:fixed;bottom:24px;right:24px;z-index:9999;background:var(--bg-card);border:2px solid #f59e0b;border-radius:12px;padding:20px;max-width:360px;box-shadow:0 8px 32px rgba(0,0,0,.4);font-family:inherit';
+  div.innerHTML='<div style="font-weight:700;font-size:14px;margin-bottom:6px;color:#f59e0b">🔬 Materiais para Inspeção</div>'+
+    '<div style="font-size:12px;color:var(--muted);margin-bottom:12px;line-height:1.6">'+lines+'</div>'+
+    '<div style="display:flex;gap:8px">'+
+      '<button class="btn btn-ghost btn-sm" style="flex:1;font-size:12px" onclick="_qualitySnooze()">🔔 Lembre-me em 10 min</button>'+
+      '<button class="btn btn-sm" style="flex:1;background:#f59e0b;color:#000;font-weight:700;font-size:12px;border:none;border-radius:8px;cursor:pointer;padding:6px 10px" onclick="_qualityAck()">🔬 Material em Inspeção</button>'+
+    '</div>';
+  document.body.appendChild(div);
+  // Som de alerta
+  try{const ac=new AudioContext();const o=ac.createOscillator();const g=ac.createGain();o.connect(g);g.connect(ac.destination);o.frequency.value=880;g.gain.setValueAtTime(0.3,ac.currentTime);g.gain.exponentialRampToValueAtTime(0.001,ac.currentTime+0.5);o.start(ac.currentTime);o.stop(ac.currentTime+0.5);}catch{}
+}
+
+function _qualitySnooze(){
+  const el2=document.getElementById('quality-popup');if(el2)el2.remove();
+  if(_qualityPopupTimer)clearTimeout(_qualityPopupTimer);
+  _qualityPopupTimer=setTimeout(()=>_checkQualityPending(),10*60*1000);
+}
+
+function _qualityAck(){
+  const el2=document.getElementById('quality-popup');if(el2)el2.remove();
+  if(_qualityPopupTimer)clearTimeout(_qualityPopupTimer);
+  // Marca compras pendentes como "em inspeção" (acked)
+  const d=gdb();
+  Object.values(d.lotes||{}).filter(l=>l.status==='aguardando').forEach(l=>{
+    if(!_qualityAckedCompras.includes(l.compraId))_qualityAckedCompras.push(l.compraId);
+  });
+  try{localStorage.setItem('_tgl_qual_acked',JSON.stringify(_qualityAckedCompras));}catch{}
+  // Navegar para aba qualidade se em suprimentos
+  if(el('sst-qual'))sstab('qual');
+}
+
+// ── Aba Qualidade ─────────────────────────────────────────
+function renderSupQualidade(){
+  const c=el('sup-c');if(!c)return;
+  const d=gdb();
+  const lotes=Object.values(d.lotes||{}).sort((a,b)=>parseInt(a.id)-parseInt(b.id));
+  const statusInfo={
+    aguardando:{label:'⏳ Aguardando',color:'#94a3b8'},
+    aprovado:{label:'✅ Aprovado',color:'#22c55e'},
+    atencao:{label:'⚠️ Requer Atenção',color:'#f59e0b'},
+    reprovado:{label:'❌ Reprovado',color:'#ef4444'}
+  };
+  const rows=lotes.length?lotes.map(l=>{
+    const si=statusInfo[l.status]||statusInfo.aguardando;
+    const isBloq=l.status==='reprovado';
+    return'<tr style="'+(isBloq?'opacity:.6':'')+'">'+
+      '<td style="font-family:monospace;font-size:13px;font-weight:700;color:var(--accent)">'+esc(l.id)+'</td>'+
+      '<td style="font-size:12px"><strong>'+esc(l.materialName)+'</strong></td>'+
+      '<td style="font-size:12px">'+esc(l.supplierName||'—')+'</td>'+
+      '<td style="font-size:12px">'+esc(l.nfe||'—')+'</td>'+
+      '<td style="font-size:12px">'+esc(l.loteFor||'—')+'</td>'+
+      '<td style="text-align:center;font-size:12px">'+esc(l.tipoVolume||'—')+'</td>'+
+      '<td style="text-align:center;font-weight:700">'+fnum(l.qtyAtual)+' <span style="color:var(--muted);font-weight:400;font-size:11px">'+esc(l.unit||'KG')+'</span></td>'+
+      '<td style="white-space:nowrap">'+
+        '<span style="font-size:12px;color:'+si.color+'">'+si.label+'</span>'+
+      '</td>'+
+      '<td style="white-space:nowrap;text-align:center">'+
+        '<button title="Aprovado" style="width:22px;height:22px;border-radius:50%;border:none;cursor:pointer;background:#22c55e;margin:0 2px" onclick="_setLoteStatus(\''+l.id+'\',\'aprovado\')"></button>'+
+        '<button title="Requer Atenção" style="width:22px;height:22px;border-radius:50%;border:none;cursor:pointer;background:#f59e0b;margin:0 2px" onclick="_setLoteStatus(\''+l.id+'\',\'atencao\')"></button>'+
+        '<button title="Reprovado" style="width:22px;height:22px;border-radius:50%;border:none;cursor:pointer;background:#ef4444;margin:0 2px" onclick="_setLoteStatus(\''+l.id+'\',\'reprovado\')"></button>'+
+        (isBloq?'<button class="btn btn-ghost btn-sm" style="font-size:11px;margin-left:4px" onclick="openDevolucaoLote(\''+l.id+'\')">↩ Devolver</button>':'')+
+      '</td>'+
+    '</tr>';
+  }).join(''):'<tr><td colspan="9" style="text-align:center;padding:20px;color:var(--muted)">Nenhum lote registrado. Lotes são criados na entrada de NF para itens de MP.</td></tr>';
+
+  c.innerHTML='<div class="card"><div class="card-header">'+
+    '<div class="card-title">🔬 Controle de Qualidade — Lotes</div>'+
+    '<div style="font-size:12px;color:var(--muted)">'+lotes.length+' lote(s) · '+lotes.filter(l=>l.status==='aguardando').length+' aguardando inspeção</div>'+
+  '</div>'+
+  '<div class="tw"><table><thead><tr>'+
+    '<th>ID</th><th>Material</th><th>Fornecedor</th><th>NF</th><th>Lote Forn.</th><th>Tipo</th><th>Qtd Disp.</th><th>Status</th><th style="text-align:center">Classificar</th>'+
+  '</tr></thead><tbody>'+rows+'</tbody></table></div>'+
+  '<div style="padding:10px 16px;font-size:11px;color:var(--muted)">'+
+    '🟢 Aprovado — liberado para produção &nbsp;|&nbsp; 🟡 Requer Atenção — liberado sob observação &nbsp;|&nbsp; 🔴 Reprovado — bloqueado, aguardando devolução'+
+  '</div></div>';
+}
+
+async function _setLoteStatus(id,status){
+  const d=gdb();
+  if(!d.lotes||!d.lotes[id]){toast('Lote não encontrado','err');return;}
+  let obs='';
+  if(status==='reprovado'){obs=prompt('Motivo da reprovação (opcional):')||'';}
+  d.lotes[id].status=status;
+  d.lotes[id].inspectedAt=Date.now();
+  d.lotes[id].inspectedBy=S?S.name:'';
+  d.lotes[id].inspObs=obs;
+  _saveItemToTable(_LOTES_TABLE,d.lotes[id]).catch(e=>console.warn('[TGL] lote status:',e));
+  logAction(d,'Qualidade Lote','ID '+id+' — '+d.lotes[id].materialName+' → '+{aguardando:'Aguardando',aprovado:'Aprovado',atencao:'Requer Atenção',reprovado:'Reprovado'}[status]+(obs?' — '+obs:''));
+  // Remover do acked se reprovado para não reaparece no popup como ok
+  if(status==='aprovado'||status==='atencao'){
+    _qualityAckedCompras=_qualityAckedCompras.filter(cid=>cid!==d.lotes[id].compraId);
+    try{localStorage.setItem('_tgl_qual_acked',JSON.stringify(_qualityAckedCompras));}catch{}
+  }
+  toast(status==='aprovado'?'Lote aprovado ✅':status==='atencao'?'Marcado como "Requer Atenção" ⚠️':'Lote reprovado ❌ — bloqueado para produção','ok');
+  renderSupQualidade();
+}
+
+function openDevolucaoLote(id){
+  const d=gdb();
+  const l=d.lotes&&d.lotes[id];if(!l)return;
+  Mopen('↩ Devolver Lote Reprovado',
+    '<div style="padding:10px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px;margin-bottom:14px;font-size:13px">'+
+      '<strong>'+esc(l.materialName)+'</strong><br>'+
+      'ID: <code>'+esc(l.id)+'</code> · Lote: <code>'+esc(l.loteFor||'—')+'</code><br>'+
+      'Qtd disponível: <strong>'+fnum(l.qtyAtual)+' '+esc(l.unit||'KG')+'</strong>'+
+    '</div>'+
+    '<div class="fg"><label class="form-label">Quantidade a devolver *</label>'+
+      '<input type="number" id="dev-qty" class="sinput" style="width:100%;box-sizing:border-box" min="0.001" max="'+l.qtyAtual+'" step="0.001" value="'+l.qtyAtual+'" placeholder="'+fnum(l.qtyAtual)+'"></div>'+
+    '<div class="fg"><label class="form-label">Observação</label>'+
+      '<input id="dev-obs" class="sinput" style="width:100%;box-sizing:border-box" placeholder="Ex: Produto fora de especificação"></div>',
+    '<button class="btn btn-ghost" onclick="Mclose()">Cancelar</button>'+
+    '<button class="btn btn-danger" onclick="submitDevolucaoLote(\''+id+'\')">↩ Confirmar Devolução</button>'
+  );
+}
+
+async function submitDevolucaoLote(id){
+  const d=gdb();
+  const l=d.lotes&&d.lotes[id];if(!l)return;
+  const qty=parseFloat((el('dev-qty').value||'0').replace(',','.'))||0;
+  const obs=(el('dev-obs').value||'').trim();
+  if(qty<=0||qty>l.qtyAtual){toast('Quantidade inválida','warn');return;}
+  // Debitar do estoque de MP (devolução = saída negativa)
+  try{
+    const sid=l.supplierId||'avulso';
+    await _rpcRMAdjust(l.materialId,sid,-qty);
+    l.qtyAtual-=qty;
+    if(l.qtyAtual<=0){l.status='devolvido';l.qtyAtual=0;}
+    l.inspObs=(l.inspObs?l.inspObs+'; ':'')+'Devolvido: '+fnum(qty)+' '+l.unit+(obs?' — '+obs:'');
+    _saveItemToTable(_LOTES_TABLE,l).catch(e=>console.warn('[TGL] lote dev:',e));
+    logAction(d,'Devolução MP Reprovado','ID '+id+' — '+l.materialName+' -'+fnum(qty)+' '+l.unit+(obs?' — '+obs:''));
+    Mclose();toast('Devolução registrada. Estoque debitado.','ok');
+    renderSupQualidade();
+  }catch(e){toast('Erro: '+esc(e.message),'err');}
+}
+
+// ═══════════════════════════════════════════════════════════
 // PREFORMADOS — Parse + CRUD + Render
 // ═══════════════════════════════════════════════════════════
 function _parsePreformado(name){
@@ -6884,22 +7058,41 @@ function _nfSupPick(id,name){
 }
 function _nfAddItem(){
   window._nfItems=window._nfItems||[];
-  window._nfItems.push({type:'',itemId:'',itemName:'',unit:'',qty:0});
+  window._nfItems.push({type:'',itemId:'',itemName:'',unit:'',qty:0,loteFor:'',tipoVolume:'bobina',nVolumes:1});
   _nfRenderItems(gdb());
 }
 function _nfRenderItems(d){
   const list=el('nf-items-list');if(!list)return;
+  const tiposVol=['bobina','pallet','spider','saco','caixa','rolo','outro'];
   list.innerHTML=(window._nfItems||[]).map(function(it,i){
     var dispVal=it.itemName?((it.code?it.code+' | ':'')+it.itemName):'';
-    return'<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:10px;border-bottom:1px solid rgba(255,255,255,.06);padding-bottom:10px">'+
-      '<div style="flex:1;min-width:200px;position:relative"><label class="form-label">Produto (MP / Embalagem / Revenda)</label>'+
-        '<div class="ac-wrap" style="position:relative"><input class="sinput" id="nf-ac-'+i+'" value="'+esc(dispVal)+'" placeholder="Digite o produto..." autocomplete="off" style="width:100%;box-sizing:border-box" oninput="_nfAC('+i+')" onfocus="_nfAC('+i+')" onblur="setTimeout(function(){_nfACClose('+i+')},220)">'+
-        '<div class="ac-drop" id="nf-acd-'+i+'" style="display:none"></div></div></div>'+
-      '<div style="width:70px;flex-shrink:0"><label class="form-label">U.M.</label>'+
-        '<input id="nf-unit-'+i+'" value="'+esc(it.unit||'')+'" readonly style="width:70px;box-sizing:border-box;height:38px;padding:0 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card2);color:var(--muted);font-size:13px"></div>'+
-      '<div style="width:90px;flex-shrink:0"><label class="form-label">Quantidade</label>'+
-        '<input type="number" min="0" step="0.001" id="nf-qty-'+i+'" value="'+(it.qty||'')+'" style="width:90px;box-sizing:border-box;height:38px;padding:0 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input,var(--bg-card));color:var(--text);font-size:13px" onchange="_nfItems['+i+'].qty=parseFloat(this.value)||0"></div>'+
-      '<button class="btn btn-ghost btn-sm" style="color:var(--danger);height:38px;align-self:flex-end" onclick="_nfItems.splice('+i+',1);_nfRenderItems(gdb())">🗑️</button>'+
+    var isMP=it.type==='MP';
+    var loteHtml=isMP?
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;padding:8px;background:rgba(255,255,255,.03);border-radius:8px;border:1px solid rgba(255,255,255,.06)">'+
+        '<div style="flex:2;min-width:120px"><label class="form-label" style="font-size:11px;color:var(--muted)">Lote do Fornecedor *</label>'+
+          '<input class="sinput" id="nf-lote-'+i+'" value="'+esc(it.loteFor||'')+'" placeholder="Ex: L2026001" style="width:100%;box-sizing:border-box;font-size:12px" onchange="window._nfItems['+i+'].loteFor=this.value.trim()"></div>'+
+        '<div style="flex:1;min-width:90px"><label class="form-label" style="font-size:11px;color:var(--muted)">Tipo de Volume</label>'+
+          '<select class="sinput" id="nf-tvol-'+i+'" style="width:100%;box-sizing:border-box;font-size:12px" onchange="window._nfItems['+i+'].tipoVolume=this.value">'+
+          tiposVol.map(v=>'<option value="'+v+'" '+(it.tipoVolume===v?'selected':'')+'>'+v.charAt(0).toUpperCase()+v.slice(1)+'</option>').join('')+
+          '</select></div>'+
+        '<div style="width:80px;flex-shrink:0"><label class="form-label" style="font-size:11px;color:var(--muted)">Nº Volumes *</label>'+
+          '<input type="number" min="1" step="1" class="sinput" id="nf-nvol-'+i+'" value="'+(it.nVolumes||1)+'" style="width:80px;box-sizing:border-box;font-size:12px" onchange="window._nfItems['+i+'].nVolumes=parseInt(this.value)||1">'+
+        '</div>'+
+        '<div style="align-self:flex-end;padding-bottom:4px;font-size:11px;color:var(--muted)">→ '+(it.qty&&it.nVolumes&&it.nVolumes>1?fnum(it.qty/it.nVolumes)+' '+(it.unit||'KG')+'/vol.':'1 ID por volume')+'</div>'+
+      '</div>'
+    :'';
+    return'<div style="margin-bottom:10px;border-bottom:1px solid rgba(255,255,255,.06);padding-bottom:12px">'+
+      '<div style="display:flex;gap:8px;align-items:flex-end">'+
+        '<div style="flex:1;min-width:200px;position:relative"><label class="form-label">Produto (MP / Embalagem / Revenda)</label>'+
+          '<div class="ac-wrap" style="position:relative"><input class="sinput" id="nf-ac-'+i+'" value="'+esc(dispVal)+'" placeholder="Digite o produto..." autocomplete="off" style="width:100%;box-sizing:border-box" oninput="_nfAC('+i+')" onfocus="_nfAC('+i+')" onblur="setTimeout(function(){_nfACClose('+i+')},220)">'+
+          '<div class="ac-drop" id="nf-acd-'+i+'" style="display:none"></div></div></div>'+
+        '<div style="width:70px;flex-shrink:0"><label class="form-label">U.M.</label>'+
+          '<input id="nf-unit-'+i+'" value="'+esc(it.unit||'')+'" readonly style="width:70px;box-sizing:border-box;height:38px;padding:0 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card2);color:var(--muted);font-size:13px"></div>'+
+        '<div style="width:90px;flex-shrink:0"><label class="form-label">Quantidade</label>'+
+          '<input type="number" min="0" step="0.001" id="nf-qty-'+i+'" value="'+(it.qty||'')+'" style="width:90px;box-sizing:border-box;height:38px;padding:0 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input,var(--bg-card));color:var(--text);font-size:13px" onchange="window._nfItems['+i+'].qty=parseFloat(this.value)||0;_nfRenderItems(gdb())"></div>'+
+        '<button class="btn btn-ghost btn-sm" style="color:var(--danger);height:38px;align-self:flex-end" onclick="window._nfItems.splice('+i+',1);_nfRenderItems(gdb())">🗑️</button>'+
+      '</div>'+
+      loteHtml+
     '</div>';
   }).join('');
 }
@@ -6933,6 +7126,19 @@ function _nfACPick(i,type,itemId){
 }
 function _nfRemItem(i){window._nfItems.splice(i,1);_nfRenderItems(gdb());}
 
+function _nextLoteIds(n){
+  const d=gdb();
+  const existing=Object.keys(d.lotes||{}).map(k=>parseInt(k)).filter(x=>!isNaN(x));
+  let next=existing.length?Math.max(...existing)+1:26000000;
+  const ids=[];for(let i=0;i<n;i++)ids.push(String(next+i).padStart(8,'0'));
+  return ids;
+}
+async function _saveLote(lote){
+  if(!_db.lotes)_db.lotes={};
+  _db.lotes[lote.id]=lote;
+  _saveItemToTable(_LOTES_TABLE,lote).catch(e=>console.warn('[TGL] lote save:',e));
+}
+
 async function _nfConfirmar(){
   const nfe=(el('nf-nfe').value||'').trim();
   const oc=(el('nf-oc').value||'').trim();
@@ -6940,15 +7146,29 @@ async function _nfConfirmar(){
   const supplierName=window._nfSupName||(el('nf-sup-inp')?el('nf-sup-inp').value.trim():'');
   const items=(window._nfItems||[]).filter(it=>it.itemId&&it.qty>0);
   if(!items.length){toast('Adicione pelo menos 1 item com quantidade','warn');return;}
+  // Validar lote obrigatório para MP
+  const mpSemLote=items.filter(it=>it.type==='MP'&&!(it.loteFor||'').trim());
+  if(mpSemLote.length){toast('Informe o lote do fornecedor para todos os itens de MP','warn');return;}
   const btn=document.querySelector('#mfooter .btn-green');if(btn){btn.disabled=true;btn.textContent='Salvando...';}
   try{
     const d=gdb();
-    const entrada={id:uid(),nfe,ocNum:oc,supplierId,supplierName,createdAt:Date.now(),createdBy:S?S.name:'',items};
+    const compraId=uid();
+    const entrada={id:compraId,nfe,ocNum:oc,supplierId,supplierName,createdAt:Date.now(),createdBy:S?S.name:'',items};
+    const lotesGerados=[];
     for(const it of items){
       if(it.type==='MP'){
         const sid=supplierId||'avulso';
         await _rpcRMAdjust(it.itemId,sid,it.qty);
         logAction(d,'Entrada MP',it.itemName+' +'+fnum(it.qty)+' '+(it.unit||'KG')+(nfe?' — NF '+nfe:'')+(oc?' / OC '+oc:'')+(supplierName?' — '+supplierName:''));
+        // Gerar IDs de lote para cada volume
+        const nVol=Math.max(1,parseInt(it.nVolumes)||1);
+        const qtyPorVol=it.qty/nVol;
+        const ids=_nextLoteIds(nVol);
+        for(const id of ids){
+          const lote={id,materialId:it.itemId,materialName:it.itemName,supplierId,supplierName,nfe,compraId,loteFor:it.loteFor||'',tipoVolume:it.tipoVolume||'volume',qtyOriginal:qtyPorVol,qtyAtual:qtyPorVol,unit:it.unit||'KG',status:'aguardando',receivedAt:Date.now(),receivedBy:S?S.name:'',inspectedAt:null,inspectedBy:null,inspObs:''};
+          await _saveLote(lote);
+          lotesGerados.push(id);
+        }
       }else{
         await _rpcPKAdjust(it.itemId,it.qty);
         logAction(d,'Entrada Emb',it.itemName+' +'+fnum(it.qty)+' '+(it.unit||'UN')+(nfe?' — NF '+nfe:'')+(oc?' / OC '+oc:'')+(supplierName?' — '+supplierName:''));
@@ -6958,7 +7178,9 @@ async function _nfConfirmar(){
     d.compras.push(entrada);
     _saveItemToTable(_COMPRAS_TABLE,entrada).catch(e=>console.warn('[TGL] compras save:',e));
     await sdb(d);Mclose();
-    toast('Entrada de NF registrada com sucesso!','ok');
+    const loteMsg=lotesGerados.length?'\n\nIDs gerados: '+lotesGerados.join(', '):'';
+    toast('Entrada de NF registrada!'+( lotesGerados.length?' '+lotesGerados.length+' volume(s) para inspeção de qualidade.':''),'ok');
+    if(lotesGerados.length)_notifyQualidade(compraId);
     renderSupCompras();
   }catch(e){
     toast('Erro ao salvar: '+e.message,'err');
@@ -6984,8 +7206,9 @@ function renderSupReqs(){
       '<td style="font-size:12px">'+esc(r.responsavel||r.createdBy||'—')+'</td>'+
       '<td style="font-size:12px">'+esc(r.solicitante||'—')+'</td>'+
       '<td style="font-size:12px">'+fdatetime(r.createdAt)+'</td>'+
-      '<td style="display:flex;gap:4px">'+
+      '<td style="display:flex;gap:4px;flex-wrap:wrap">'+
         '<button class="btn btn-ghost btn-sm" onclick="openViewReq(\''+r.id+'\')">👁️ Ver</button>'+
+        '<button class="btn btn-ghost btn-sm" style="color:#22c55e" onclick="openDevolucaoSobra(\''+r.id+'\')">↩ Sobra</button>'+
         '<button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="deleteReqConfirm(\''+r.id+'\')">🗑️</button>'+
       '</td>'+
     '</tr>').join('')+
@@ -7048,6 +7271,72 @@ async function deleteReq(id){
   renderSupReqs();
 }
 
+// ── Devolução de Sobras ────────────────────────────────────
+function openDevolucaoSobra(reqId){
+  const d=gdb();
+  const r=(d.requisicoes||[]).find(x=>x.id===reqId);if(!r){toast('Requisição não encontrada','err');return;}
+  const mpItems=r.items.filter(it=>it.type==='MP');
+  if(!mpItems.length){toast('Nesta requisição não há itens de MP para devolver','warn');return;}
+  // Para cada item MP, buscar lotes FIFO usados
+  const opts=mpItems.map((it,i)=>{
+    const fifoLotes=Object.values(d.lotes||{})
+      .filter(l=>l.materialId===it.itemId&&l.status!=='reprovado'&&l.status!=='devolvido')
+      .sort((a,b)=>parseInt(a.id)-parseInt(b.id));
+    const loteInfo=fifoLotes.length?fifoLotes.map(l=>'ID '+l.id+' ('+fnum(l.qtyAtual)+' '+l.unit+' disp.)').join(', '):'sem lotes rastreados';
+    return'<div style="margin-bottom:14px;padding:10px;background:var(--bg-card2);border-radius:8px">'+
+      '<div style="font-weight:600;font-size:13px;margin-bottom:6px">'+esc(it.itemName)+'</div>'+
+      '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">'+loteInfo+'</div>'+
+      '<div style="display:flex;gap:8px;align-items:center">'+
+        '<div style="flex:1"><label class="form-label" style="font-size:11px">ID do Lote (opcional)</label>'+
+          '<input id="sob-lid-'+i+'" class="sinput" style="width:100%;box-sizing:border-box;font-size:12px" placeholder="Ex: 26000001" value="'+(fifoLotes.length?fifoLotes[0].id:'')+'"></div>'+
+        '<div style="width:90px"><label class="form-label" style="font-size:11px">Qtd. Sobra ('+esc(it.unit||'KG')+')</label>'+
+          '<input type="number" min="0.001" step="0.001" id="sob-qty-'+i+'" class="sinput" style="width:90px;box-sizing:border-box;font-size:12px" placeholder="0" data-itemid="'+esc(it.itemId)+'" data-suppid="'+esc(it.supplierId||'')+'" data-unit="'+esc(it.unit||'KG')+'" data-name="'+esc(it.itemName)+'"></div>'+
+      '</div>'+
+    '</div>';
+  }).join('');
+  window._sobMpItems=mpItems;
+  Mopen('↩ Devolver Sobra de Material',
+    '<div style="margin-bottom:12px;font-size:13px;color:var(--muted)">Informe as quantidades de sobra de cada item para reintegrar ao estoque.</div>'+opts,
+    '<button class="btn btn-ghost" onclick="Mclose()">Cancelar</button>'+
+    '<button class="btn btn-green" onclick="submitDevolucaoSobra(\''+reqId+'\')">↩ Confirmar Devolução</button>'
+  );
+}
+
+async function submitDevolucaoSobra(reqId){
+  const d=gdb();
+  const r=(d.requisicoes||[]).find(x=>x.id===reqId);if(!r)return;
+  const mpItems=window._sobMpItems||[];
+  let total=0;
+  const devols=[];
+  for(let i=0;i<mpItems.length;i++){
+    const qty=parseFloat((el('sob-qty-'+i)?.value||'0').replace(',','.'))||0;
+    if(qty<=0)continue;
+    const loteId=(el('sob-lid-'+i)?.value||'').trim();
+    devols.push({it:mpItems[i],qty,loteId});total+=qty;
+  }
+  if(!total){toast('Informe pelo menos uma quantidade de sobra','warn');return;}
+  const btn=document.querySelector('#mfooter .btn-green');if(btn){btn.disabled=true;btn.textContent='Salvando...';}
+  try{
+    for(const dev of devols){
+      const sid=dev.it.supplierId||'avulso';
+      await _rpcRMAdjust(dev.it.itemId,sid,dev.qty);
+      logAction(d,'Devolução Sobra',dev.it.itemName+' +'+fnum(dev.qty)+' '+(dev.it.unit||'KG')+' — Sobra de '+esc(r.num)+(dev.loteId?' — ID '+dev.loteId:''));
+      // Atualizar qtyAtual do lote se informado
+      if(dev.loteId&&d.lotes&&d.lotes[dev.loteId]){
+        d.lotes[dev.loteId].qtyAtual+=dev.qty;
+        _saveItemToTable(_LOTES_TABLE,d.lotes[dev.loteId]).catch(e=>console.warn('[TGL] sob lote:',e));
+      }
+    }
+    await sdb(d);
+    Mclose();toast('Sobra devolvida ao estoque!','ok');
+    renderSupReqs();
+    if(el('sup-mp-rows'))_renderSupMPRows(gdb());
+  }catch(e){
+    toast('Erro: '+esc(e.message),'err');
+    if(btn){btn.disabled=false;btn.textContent='↩ Confirmar Devolução';}
+  }
+}
+
 function openNovaReq(){
   const d=gdb();
   const _nums=(d.requisicoes||[]).map(r=>{const m=(r.num||'').match(/REQ-(\d+)/);return m?parseInt(m[1]):0;});
@@ -7106,6 +7395,26 @@ function _reqRenderItems(d){
       supHtml='<div style="min-width:170px;flex:1"><label class="form-label">Fornecedor</label>'+
         '<select disabled style="width:100%;box-sizing:border-box;height:38px;padding:0 6px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card2);color:var(--muted);font-size:12px"><option>N/A (Embalagem)</option></select></div>';
     }
+    // FIFO — indica qual ID entregar para MP
+    var fifoHtml='';
+    if(it.type==='MP'&&it.itemId&&it.qty>0){
+      var fifoLotes=Object.values(d.lotes||{})
+        .filter(function(l){return l.materialId===it.itemId&&l.status!=='reprovado'&&l.status!=='devolvido'&&l.qtyAtual>0;})
+        .sort(function(a,b){return parseInt(a.id)-parseInt(b.id);});
+      if(fifoLotes.length){
+        var qtdRestante=it.qty;var fifoLines=[];
+        for(var fi=0;fi<fifoLotes.length&&qtdRestante>0;fi++){
+          var fl=fifoLotes[fi];var usar=Math.min(fl.qtyAtual,qtdRestante);
+          fifoLines.push('ID <strong>'+esc(fl.id)+'</strong> ('+esc(fl.loteFor||'?')+') — '+fnum(usar)+' '+esc(fl.unit||'KG')+' <span style="color:'+{aprovado:'#22c55e',atencao:'#f59e0b',aguardando:'#94a3b8'}[fl.status]+'">['+{aprovado:'✅ Aprovado',atencao:'⚠️ Atenção',aguardando:'⏳ Aguardando'}[fl.status]+']</span>');
+          qtdRestante-=usar;
+        }
+        fifoHtml='<div style="margin-top:6px;padding:6px 10px;background:rgba(34,197,94,.07);border:1px solid rgba(34,197,94,.2);border-radius:8px;font-size:12px">'+
+          '<strong style="color:#22c55e">📦 FIFO — Entregar:</strong><br>'+fifoLines.join('<br>')+'</div>';
+        if(qtdRestante>0)fifoHtml+='<div style="margin-top:4px;font-size:11px;color:#ef4444">⚠️ Estoque insuficiente em lotes aprovados (falta '+fnum(qtdRestante)+' '+esc(it.unit||'KG')+')</div>';
+      }else if(it.itemId){
+        fifoHtml='<div style="margin-top:6px;font-size:11px;color:#f59e0b">⚠️ Nenhum lote disponível com status aprovado/atenção. Verifique o controle de qualidade.</div>';
+      }
+    }
     return'<div style="margin-bottom:10px;border-bottom:1px solid rgba(255,255,255,.06);padding-bottom:10px">'+
       '<div style="position:relative;margin-bottom:6px"><label class="form-label">Item (MP ou Embalagem)</label>'+
         '<input class="sinput" id="req-ac-'+i+'" value="'+esc(dispVal)+'" placeholder="Digite o produto..." autocomplete="off" style="width:100%;box-sizing:border-box" oninput="_reqAC('+i+')" onfocus="_reqAC('+i+')" onblur="setTimeout(function(){_reqACClose('+i+')},220)">'+
@@ -7115,9 +7424,10 @@ function _reqRenderItems(d){
           '<input id="req-unit-'+i+'" value="'+esc(it.unit||'')+'" readonly style="width:58px;box-sizing:border-box;height:38px;padding:0 6px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card2);color:var(--muted);font-size:13px"></div>'+
         supHtml+
         '<div style="width:90px;flex-shrink:0"><label class="form-label">Quantidade</label>'+
-          '<input type="text" inputmode="decimal" value="'+(it.qty||'')+'" placeholder="0" style="width:90px;box-sizing:border-box;height:38px;padding:0 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input,var(--bg-card));color:var(--text);font-size:13px" oninput="_reqItems['+i+'].qty=parseFloat(this.value.replace(\',\',\'.\'))||0" onchange="_reqItems['+i+'].qty=parseFloat(this.value.replace(\',\',\'.\'))||0"></div>'+
-        '<button class="btn btn-ghost btn-sm" style="color:var(--danger);height:38px;align-self:flex-end;flex-shrink:0" onclick="_reqItems.splice('+i+',1);_reqRenderItems(gdb())">🗑️</button>'+
+          '<input type="text" inputmode="decimal" value="'+(it.qty||'')+'" placeholder="0" style="width:90px;box-sizing:border-box;height:38px;padding:0 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input,var(--bg-card));color:var(--text);font-size:13px" oninput="_reqItems['+i+'].qty=parseFloat(this.value.replace(\',\',\'.\'))||0;_reqRenderItems(gdb())" onchange="_reqItems['+i+'].qty=parseFloat(this.value.replace(\',\',\'.\'))||0;_reqRenderItems(gdb())"></div>'+
+        '<button class="btn btn-ghost btn-sm" style="color:var(--danger);height:38px;align-self:flex-end;flex-shrink:0" onclick="window._reqItems.splice('+i+',1);_reqRenderItems(gdb())">🗑️</button>'+
       '</div>'+
+      fifoHtml+
     '</div>';
   }).join('');
 }
