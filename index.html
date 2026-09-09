@@ -4216,9 +4216,14 @@ function _filterProd(sec){
   if(!_prodSort[sec])_prodSort[sec]={col:'deliveryDate',dir:1};
   const _ps=_prodSort[sec];
   const q=(_prodSearch[sec]||'').toLowerCase().trim();
-  const allOps=d.ops.filter(o=>!o.archived&&o.status==='ativo').filter(op=>
-    op.items.some(i=>{const p=d.products.find(x=>x.id===i.pid);return p&&!p.isStock&&(p.sectors||[]).includes(sec);})
-  );
+  const _24h=24*60*60*1000,_now=Date.now();
+  const allOps=d.ops.filter(o=>!o.archived&&o.status==='ativo').filter(op=>{
+    const si=op.items.filter(i=>{const p=d.products.find(x=>x.id===i.pid);return p&&!p.isStock&&(p.sectors||[]).includes(sec);});
+    if(!si.length)return false;
+    // Ocultar após 24h se todos os itens do setor já estão liberados
+    const todosLib=si.every(i=>i.status==='liberado'&&i.statusAt&&(_now-i.statusAt)>_24h);
+    return!todosLib;
+  });
   const opsMeta=allOps.map(op=>{
     const secItems=op.items.filter(i=>{const p=d.products.find(x=>x.id===i.pid);return p&&!p.isStock&&(p.sectors||[]).includes(sec);});
     const lib=secItems.filter(i=>i.status==='liberado'&&(!i.qtyReleased||i.qtyReleased>=i.qty)).length;
