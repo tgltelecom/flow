@@ -7551,8 +7551,8 @@ function _checkStockAlerts(){
   const showModal=roles.includes('comprador')||roles.includes('admin');
   if(!showModal)return;
   const d=gdb();
-  const rmCrit=d.rawMaterials.filter(m=>['zero','abaixo'].includes(_rmStatus(d,m.id)));
-  const embCrit=d.packaging.filter(p=>['zero','abaixo'].includes(_packStatus(d,p.id)));
+  const rmCrit=d.rawMaterials.filter(m=>m.minStock>0&&_rmStockTotal(d,m.id)<m.minStock);
+  const embCrit=d.packaging.filter(p=>p.minStock>0&&(d.packagingStock[p.id]||0)<p.minStock);
   if(!rmCrit.length&&!embCrit.length)return;
   const total=rmCrit.length+embCrit.length;
   const list=[
