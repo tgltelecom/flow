@@ -7169,6 +7169,13 @@ async function _saveLote(lote){
 }
 
 async function _nfConfirmar(){
+  // Sync valores dos inputs antes de processar (onchange só dispara no blur)
+  (window._nfItems||[]).forEach((it,i)=>{
+    const qInp=el('nf-qty-'+i);if(qInp)it.qty=parseFloat(qInp.value)||0;
+    const lInp=el('nf-lote-'+i);if(lInp)it.loteFor=lInp.value.trim();
+    const nInp=el('nf-nvol-'+i);if(nInp)it.nVolumes=parseInt(nInp.value)||1;
+    const tvInp=el('nf-tvol-'+i);if(tvInp)it.tipoVolume=tvInp.value;
+  });
   const nfe=(el('nf-nfe').value||'').trim();
   const oc=(el('nf-oc').value||'').trim();
   const supplierId=window._nfSupId||'';
