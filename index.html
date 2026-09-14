@@ -1256,6 +1256,11 @@ async function saveDBRemote(d){
           merged.packaging=_db.packaging;
           merged.suppliers=_db.suppliers;
           merged.users=_db.users;
+          // Preservar tabelas separadas que não estão no blob
+          merged.lotes=_db.lotes||{};
+          merged.compras=_db.compras||[];
+          merged.requisicoes=_db.requisicoes||[];
+          merged.preformadosStock=_db.preformadosStock||{};
           if(_saveQueue===null){_db=merged;}
           try{localStorage.setItem('tgl_bk',JSON.stringify(merged));}catch{}
           if(S&&!el('M').classList.contains('open'))_checkAlert();
@@ -6417,11 +6422,14 @@ async function openHistoricoMP(mid){
         const solStr=solMatch?solMatch[1].trim():'';
         const respDisplay=respStr||(row.uname||'—');
         const respCell=solStr?esc(respDisplay)+'<br><span style="color:var(--accent);font-size:11px">Sol: '+esc(solStr)+'</span>':esc(respDisplay);
+        const idsMatch=det.match(/IDs?:\s*([\d ,]+)/);
+        const idsStr=idsMatch?idsMatch[1].trim().split(/[, ]+/).filter(Boolean).map(x=>'<code style="font-size:10px;background:rgba(99,102,241,.1);padding:1px 4px;border-radius:4px">'+esc(x)+'</code>').join(' '):'';
         return '<tr>'+
           '<td style="font-size:12px;white-space:nowrap;color:var(--muted)">'+dtStr+'</td>'+
           '<td><span style="'+cls+'">'+tipo+'</span></td>'+
           '<td style="text-align:center">'+deltaStr+'</td>'+
           '<td style="font-size:12px;color:var(--accent);white-space:nowrap">'+esc(refStr)+'</td>'+
+          '<td style="font-size:11px;max-width:200px">'+idsStr+'</td>'+
           '<td style="font-size:12px;color:var(--muted)">'+respCell+'</td>'+
           '</tr>';
       }).join('');
@@ -6714,9 +6722,16 @@ let _qualityAckedCompras=[];
 try{_qualityAckedCompras=JSON.parse(localStorage.getItem('_tgl_qual_acked')||'[]');}catch{}
 
 function _notifyQualidade(compraId){
-  // Marca esta compra como pendente de inspeção
-  // Popup aparece para qualquer usuário qualidade no próximo check
   _checkQualityPending();
+  // Notificação persistente no sino para perfil qualidade/admin
+  const d=gdb();
+  const novos=Object.values(d.lotes||{}).filter(l=>l.compraId===compraId);
+  if(!novos.length)return;
+  const mats=[...new Set(novos.map(l=>l.materialName))];
+  _createNotif('qualidade_inspecao',['qualidade','admin'],
+    '🔬 '+novos.length+' volume(s) aguardando inspeção de qualidade',
+    'Materiais: '+mats.join(', ')+'\nNF: '+(novos[0].nfe||'—')+'\nIDs: '+novos.map(l=>l.id).join(', ')
+  );
 }
 
 function _checkQualityPending(){
@@ -7048,6 +7063,8 @@ function openNovaEntradaNF(){
   _nfAddItem();
 }
 function _nfSupFilt(){
+  // Limpa seleção anterior para permitir troca de fornecedor
+  window._nfSupId='';window._nfSupName='';
   const inp=el('nf-sup-inp'),drop=el('nf-sup-drop');if(!inp||!drop)return;
   const q=inp.value.toLowerCase().trim();
   const hits=(gdb().suppliers||[]).filter(s=>!q||(s.name||'').toLowerCase().includes(q)).slice(0,12);
@@ -7128,6 +7145,7 @@ function _nfACPick(i,type,itemId){
   var inp=el('nf-ac-'+i);if(inp)inp.value=(window._nfItems[i].code?window._nfItems[i].code+' | ':'')+item.name;
   var unitInp=el('nf-unit-'+i);if(unitInp)unitInp.value=window._nfItems[i].unit;
   _nfACClose(i);
+  _nfRenderItems(gdb()); // Mostra campos de lote imediatamente ao selecionar MP
 }
 function _nfRemItem(i){window._nfItems.splice(i,1);_nfRenderItems(gdb());}
 
@@ -7164,11 +7182,11 @@ async function _nfConfirmar(){
       if(it.type==='MP'){
         const sid=supplierId||'avulso';
         await _rpcRMAdjust(it.itemId,sid,it.qty);
-        logAction(d,'Entrada MP',it.itemName+' +'+fnum(it.qty)+' '+(it.unit||'KG')+(nfe?' — NF '+nfe:'')+(oc?' / OC '+oc:'')+(supplierName?' — '+supplierName:''));
-        // Gerar IDs de lote para cada volume
+        // Gerar IDs de lote antes do logAction para incluir nos detalhes
         const nVol=Math.max(1,parseInt(it.nVolumes)||1);
         const qtyPorVol=it.qty/nVol;
         const ids=_nextLoteIds(nVol);
+        logAction(d,'Entrada MP',it.itemName+' +'+fnum(it.qty)+' '+(it.unit||'KG')+(nfe?' — NF '+nfe:'')+(oc?' / OC '+oc:'')+(supplierName?' — '+supplierName:'')+(ids.length?' — IDs: '+ids.join(', '):''));
         for(const id of ids){
           const lote={id,materialId:it.itemId,materialName:it.itemName,supplierId,supplierName,nfe,compraId,loteFor:it.loteFor||'',tipoVolume:it.tipoVolume||'volume',qtyOriginal:qtyPorVol,qtyAtual:qtyPorVol,unit:it.unit||'KG',status:'aguardando',receivedAt:Date.now(),receivedBy:S?S.name:'',inspectedAt:null,inspectedBy:null,inspObs:''};
           await _saveLote(lote);
