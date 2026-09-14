@@ -6916,11 +6916,17 @@ async function _savePRFStock(stock){
   if(!r.ok){const t=await r.text();throw new Error(t||'Erro ao salvar preformado');}
 }
 
-function renderSupPreformados(){
+function renderSupPreformados(q){
   const c=el('sup-c');if(!c)return;
   const d=gdb();
-  const prfs=(d.products||[]).filter(p=>_parsePreformado(p.name)).map(p=>({p,attr:_parsePreformado(p.name),stk:d.preformadosStock&&d.preformadosStock[p.id]?d.preformadosStock[p.id]:null}));
-  c.innerHTML='<div class="card"><div class="card-header"><div class="card-title">🧵 Estoque de Preformados</div></div>'+
+  const busca=(q||el('prf-busca')?el('prf-busca')&&el('prf-busca').value||'':'').toLowerCase();
+  let prfs=(d.products||[]).filter(p=>_parsePreformado(p.name)).map(p=>({p,attr:_parsePreformado(p.name),stk:d.preformadosStock&&d.preformadosStock[p.id]?d.preformadosStock[p.id]:null}));
+  if(busca)prfs=prfs.filter(({p})=>p.name.toLowerCase().includes(busca));
+  c.innerHTML='<div class="card"><div class="card-header"><div class="card-title">🧵 Estoque de Preformados</div>'+
+    '<div style="display:flex;gap:8px;align-items:center;margin-left:auto">'+
+      '<div class="sinput-wrap" style="position:relative"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);pointer-events:none;color:var(--muted)">🔍</span>'+
+        '<input id="prf-busca" class="sinput" style="padding-left:32px;width:220px" placeholder="Buscar preformado..." value="'+esc(busca)+'" oninput="renderSupPreformados()"></div>'+
+    '</div></div>'+
     (prfs.length?
       '<div class="tw"><table><thead><tr>'+
         '<th>Produto</th><th>Tipo</th><th>Material</th><th>Range (mm)</th><th>Cor</th><th>Varetas</th><th>Comp. (mm)</th>'+
