@@ -6938,19 +6938,35 @@ function _finalizarInspecaoGrupo(compraId){
 }
 function openRastrearID(){
   Mopen('🔎 Rastrear Volume por ID',
-    '<div style="margin-bottom:12px"><label class="form-label">Número do ID</label>'+
-      '<input id="rid-inp" class="sinput" style="width:100%;box-sizing:border-box" placeholder="Ex: 26000001" onkeydown="if(event.key===\'Enter\')_rastrearIDExec()">'+
+    '<div style="margin-bottom:12px"><label class="form-label">Número do ID <span style="font-weight:400;color:var(--muted)">(pode digitar só os últimos dígitos)</span></label>'+
+      '<input id="rid-inp" class="sinput" style="width:100%;box-sizing:border-box" placeholder="Ex: 18 ou 26000018" onkeydown="if(event.key===\'Enter\')_rastrearIDExec()">'+
     '</div><div id="rid-res"></div>',
     '<button class="btn btn-ghost" onclick="Mclose()">Fechar</button>'+
     '<button class="btn btn-green" onclick="_rastrearIDExec()">🔎 Buscar</button>'
   );
 }
 async function _rastrearIDExec(){
-  const id=(el('rid-inp')&&el('rid-inp').value||'').trim();
-  if(!id){toast('Informe o ID','warn');return;}
+  const raw=(el('rid-inp')&&el('rid-inp').value||'').trim();
+  if(!raw){toast('Informe o ID','warn');return;}
   const res=el('rid-res');if(!res)return;
   res.innerHTML='<div style="text-align:center;padding:20px;color:var(--muted)">🔄 Buscando...</div>';
-  const d=gdb();const l=d.lotes&&d.lotes[id];
+  const d=gdb();
+  // Resolver sufixo parcial → ID completo
+  let id=raw;
+  const todosLotes=Object.keys(d.lotes||{});
+  if(!(d.lotes&&d.lotes[raw])){
+    const matches=todosLotes.filter(k=>k.endsWith(raw));
+    if(matches.length===1){id=matches[0];}
+    else if(matches.length>1){
+      res.innerHTML='<div style="margin-bottom:8px;font-size:13px;color:var(--muted)">'+matches.length+' IDs encontrados — clique para ver detalhes:</div>'+
+        '<div style="display:flex;flex-wrap:wrap;gap:6px">'+
+        matches.map(m=>'<button class="btn btn-ghost btn-sm" style="font-family:monospace;letter-spacing:.5px" onclick="el(\'rid-inp\').value=\''+esc(m)+'\';_rastrearIDExec()">'+esc(m)+'</button>').join('')+
+        '</div>';
+      return;
+    }
+    // nenhum match em lotes ativos — usa raw (busca no audit log)
+  }
+  const l=d.lotes&&d.lotes[id];
   const sc={aguardando:'#94a3b8',aprovado:'#22c55e',atencao:'#f59e0b',reprovado:'#ef4444',devolvido:'#6b7280'};
   const sl={aguardando:'⏳ Aguardando Inspeção',aprovado:'✅ Aprovado',atencao:'⚠️ Requer Atenção',reprovado:'❌ Reprovado',devolvido:'↩ Devolvido'};
   try{
