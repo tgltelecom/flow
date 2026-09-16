@@ -6634,28 +6634,70 @@ function _kpiCard(label,val,sub,color,bg){
 }
 
 // ─── ENTRADAS DE NF ──────────────────────────────────────────────────────────
+let _nfBusca='';
+let _nfSort={col:'data',dir:-1};
+function _nfSetBusca(v){_nfBusca=v;renderSupCompras();}
+function _nfToggleSort(col){
+  if(_nfSort.col===col)_nfSort.dir*=-1;else{_nfSort={col,dir:col==='data'?-1:1};}
+  renderSupCompras();
+}
 function renderSupCompras(){
   const c=el('sup-c');if(!c)return;
   const d=gdb();
-  const lista=(d.compras||[]).slice().reverse();
+  let lista=(d.compras||[]).slice();
+  const q=_nfBusca.toLowerCase().trim();
+  if(q)lista=lista.filter(c2=>
+    (c2.nfe||'').toLowerCase().includes(q)||
+    (c2.supplierName||'').toLowerCase().includes(q)||
+    (c2.ocNum||'').toLowerCase().includes(q)||
+    (c2.createdBy||'').toLowerCase().includes(q)||
+    (c2.items||[]).some(it=>(it.itemName||'').toLowerCase().includes(q))
+  );
+  lista.sort((a,b)=>{
+    let va,vb;
+    if(_nfSort.col==='nfe'){va=a.nfe||'';vb=b.nfe||'';}
+    else if(_nfSort.col==='oc'){va=a.ocNum||'';vb=b.ocNum||'';}
+    else if(_nfSort.col==='forn'){va=a.supplierName||'';vb=b.supplierName||'';}
+    else if(_nfSort.col==='itens'){va=(a.items||[]).length;vb=(b.items||[]).length;}
+    else if(_nfSort.col==='user'){va=a.createdBy||'';vb=b.createdBy||'';}
+    else{va=a.createdAt||0;vb=b.createdAt||0;}
+    if(typeof va==='string')return _nfSort.dir*(va.localeCompare(vb,'pt'));
+    return _nfSort.dir*(va-vb);
+  });
+  const si=col=>'<span style="color:var(--muted);font-size:10px;margin-left:3px">'+(_nfSort.col===col?(_nfSort.dir>0?'▲':'▼'):'⇅')+'</span>';
+  const total=(d.compras||[]).length;
+  const thS='cursor:pointer;white-space:nowrap;user-select:none';
   c.innerHTML='<div class="card"><div class="card-header"><div class="card-title">🧾 Entradas de NF</div>'+
     '<button class="btn btn-green btn-sm" onclick="openNovaEntradaNF()">➕ Nova Entrada NF</button>'+
     '</div>'+
-    (lista.length?'<div class="tw"><table><thead><tr>'+
-      '<th>Nº NF</th><th>OC</th><th>Fornecedor</th><th>Itens</th><th>Usuário</th><th>Data</th><th></th>'+
-    '</tr></thead><tbody>'+
-    lista.map(c2=>'<tr>'+
-      '<td><strong>'+esc(c2.nfe||'—')+'</strong></td>'+
-      '<td>'+(c2.ocNum?esc(c2.ocNum):'<span style="color:var(--muted)">—</span>')+'</td>'+
-      '<td>'+esc(c2.supplierName||'—')+'</td>'+
-      '<td>'+c2.items.length+' item(s)</td>'+
-      '<td style="font-size:12px">'+esc(c2.createdBy||'—')+'</td>'+
-      '<td style="font-size:12px">'+fdatetime(c2.createdAt)+'</td>'+
-      '<td style="display:flex;gap:4px"><button class="btn btn-ghost btn-sm" onclick="openViewNF(\''+c2.id+'\')">👁️ Ver</button>'+
-        '<button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="deleteNFConfirm(\''+c2.id+'\')">🗑️</button></td>'+
-    '</tr>').join('')+
-    '</tbody></table></div>'+
-    '<div style="padding:8px 16px;font-size:12px;color:var(--muted)">'+lista.length+' entrada(s) registrada(s)</div>':
+    '<div style="padding:10px 16px 0;position:relative">'+
+      '<span style="position:absolute;left:26px;top:50%;transform:translateY(-30%);color:var(--muted);pointer-events:none;font-size:14px">🔍</span>'+
+      '<input id="nf-busca" class="sinput" style="padding-left:34px;width:100%;box-sizing:border-box" placeholder="Buscar por NF, fornecedor, OC, item ou usuário..." value="'+esc(_nfBusca)+'" oninput="_nfSetBusca(this.value)">'+
+    '</div>'+
+    (total||q?
+      '<div class="tw" style="margin-top:8px"><table><thead><tr>'+
+        '<th style="'+thS+'" onclick="_nfToggleSort(\'nfe\')">Nº NF'+si('nfe')+'</th>'+
+        '<th style="'+thS+'" onclick="_nfToggleSort(\'oc\')">OC'+si('oc')+'</th>'+
+        '<th style="'+thS+'" onclick="_nfToggleSort(\'forn\')">Fornecedor'+si('forn')+'</th>'+
+        '<th style="'+thS+'" onclick="_nfToggleSort(\'itens\')">Itens'+si('itens')+'</th>'+
+        '<th style="'+thS+'" onclick="_nfToggleSort(\'user\')">Usuário'+si('user')+'</th>'+
+        '<th style="'+thS+'" onclick="_nfToggleSort(\'data\')">Data'+si('data')+'</th>'+
+        '<th></th>'+
+      '</tr></thead><tbody>'+
+      (lista.length?lista.map(c2=>'<tr>'+
+        '<td><strong>'+esc(c2.nfe||'—')+'</strong></td>'+
+        '<td>'+(c2.ocNum?esc(c2.ocNum):'<span style="color:var(--muted)">—</span>')+'</td>'+
+        '<td>'+esc(c2.supplierName||'—')+'</td>'+
+        '<td>'+(c2.items||[]).length+' item(s)</td>'+
+        '<td style="font-size:12px">'+esc(c2.createdBy||'—')+'</td>'+
+        '<td style="font-size:12px">'+fdatetime(c2.createdAt)+'</td>'+
+        '<td style="display:flex;gap:4px"><button class="btn btn-ghost btn-sm" onclick="openViewNF(\''+c2.id+'\')">👁️ Ver</button>'+
+          '<button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="deleteNFConfirm(\''+c2.id+'\')">🗑️</button></td>'+
+      '</tr>').join(''):
+      '<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--muted)">Nenhuma entrada encontrada para "'+esc(q)+'"</td></tr>')+
+      '</tbody></table></div>'+
+      '<div style="padding:8px 16px;font-size:12px;color:var(--muted)">'+total+' entrada(s) total'+(lista.length!==total?' · '+lista.length+' exibida(s)':'')+
+      '</div>':
     '<div class="empty"><div class="ei">🧾</div><p>Nenhuma entrada de NF registrada</p></div>')+
   '</div>';
 }
